@@ -272,6 +272,25 @@ En dev, `VITE_API_URL` se deja **vacío**: axios pide rutas relativas (`/api/...
 y el proxy de Vite las manda a `localhost:3001`. Al ser mismo origen no hay
 CORS, y da igual en qué puerto acabe el dev server.
 
+### Ensayar producción en local
+
+`vite preview` sirve el build real, con `VITE_API_URL=/vorael` ya compilado
+dentro del bundle. Para que esa versión funcione sin Nginx,
+[vite.config.ts](apps/web/vite.config.ts) define un `preview.proxy` que replica
+la regla de Nginx: recorta el prefijo y reenvía a Express. Sirve para detectar
+antes de desplegar los fallos que solo aparecen bajo la sub-ruta.
+
+```bash
+pnpm build:web
+pnpm --filter web preview   # http://localhost:4173/vorael/
+```
+
+`server.proxy` es exclusivo del dev server, así que sin ese bloque las llamadas
+a `/vorael/api/...` caerían en el fallback del SPA y devolverían `index.html`
+con un 200 — JSON esperado, HTML recibido, y un archivo corrupto si es una
+descarga. Con `VITE_API_URL` vacío la clave del proxy queda en `/api` y el
+`rewrite` no hace nada.
+
 ---
 
 ## 6. Variables de entorno
@@ -342,12 +361,17 @@ vorael/
 
 ## 8. Cosas a tener en cuenta
 
-- **La descarga usa `fetch` sin prefijo.** En
-  [ImageDetail.tsx:46](apps/web/src/pages/ImageDetail.tsx) la descarga llama a
-  `fetch('/api/images/...')` en crudo, saltándose el `baseURL` de axios. En dev
-  funciona por el proxy de Vite; en producción pide `/api/images/...` en la raíz
-  del dominio en vez de `/vorael/api/...`, ruta que Nginx no proxea. Debería
-  usar el mismo `baseURL` que el resto del cliente.
+- **Toda petición al API debe pasar por la instancia de axios** de
+  `services/api.ts`, nunca por `fetch` en crudo. Un `fetch('/api/...')` pide la
+  raíz del dominio y se salta el `baseURL`, así que en producción no llega a
+  Express: Nginx solo proxea `/vorael/api/`. En desarrollo el proxy de Vite
+  responde en `/api` a secas, con lo cual el error no se nota hasta desplegar.
+  Los dos botones de descarga tuvieron exactamente ese fallo; hoy ambos llaman a
+  `downloadImage()`.
+- **La descarga sobrescribe el timeout a 120 s.** La instancia usa 20 s, que
+  sobra para JSON, pero el endpoint baja el original de Spaces y lo recodifica
+  con `sharp`. Nginx le concede 120 s a propósito (§2.2), y `downloadImage()`
+  iguala ese margen para no cortar las imágenes grandes.
 - **`lib/utils.ts` tiene un `useDebounce` que no hace nada** (devuelve el valor
   tal cual). El real está en `hooks/useDebounce.ts`. No importar el de `lib`.
 - **`sharp` trae binarios nativos por plataforma.** No se puede copiar el
