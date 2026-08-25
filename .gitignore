@@ -1,0 +1,22 @@
+node_modules/
+dist/
+build/
+release/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.vscode/
+.idea/
+coverage/
+.turbo/
+.cache/
+
+# Artefactos de `tsc -b` en apps/web (se regeneran en cada build)
+*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
+
+# Permisos locales de Claude Code (por máquina, no compartir)
+.claude/settings.local.json

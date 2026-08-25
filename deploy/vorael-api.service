@@ -1,0 +1,38 @@
+# /etc/systemd/system/vorael-api.service
+#
+#   sudo cp deploy/vorael-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vorael-api
+#   sudo systemctl status vorael-api
+#   journalctl -u vorael-api -f
+
+[Unit]
+Description=VORAEL API (Express)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/html/vorael/api
+# Ajustar la ruta de node si se usa nvm: `which node` como el usuario del servicio.
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+# El resto de la configuración se lee de /var/www/html/vorael/api/.env
+# (src/config.ts hace dotenv.config sobre ../.env respecto de dist/).
+
+# Endurecimiento básico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vorael-api
+
+[Install]
+WantedBy=multi-user.target

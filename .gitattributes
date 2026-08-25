@@ -1,0 +1,10 @@
+# El repo se normaliza a LF (igual que .editorconfig). Evita que un checkout en
+# Windows meta CRLF en el historial.
+* text=auto eol=lf
+
+# Binarios y lockfile: sin conversion ni diff ruidoso.
+*.tar.gz binary
+*.png binary
+*.jpg binary
+*.webp binary
+pnpm-lock.yaml linguist-generated
