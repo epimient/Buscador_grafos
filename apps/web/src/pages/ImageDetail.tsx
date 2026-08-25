@@ -6,9 +6,9 @@ import { useImage, useRelatedImages } from '@/hooks/useImages';
 import { ImageCard } from '@/components/features/ImageCard';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Skeleton } from '@/components/ui/Skeleton';
-import { formatDate } from '@/lib/utils';
-
-type DownloadFormat = 'webp' | 'png' | 'jpg';
+import { downloadFileName, formatDate, saveBlobAs } from '@/lib/utils';
+import { downloadImage } from '@/services/api';
+import type { DownloadFormat } from '@/types/image';
 
 const FORMAT_LABELS: Record<DownloadFormat, { label: string; hint: string }> = {
   webp: { label: 'WebP', hint: 'Recomendado' },
@@ -43,19 +43,8 @@ export function ImageDetailPage() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      const res = await fetch(`/api/images/${image.id}/download?format=${fmt}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `Error ${res.status}`);
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const baseName = (image.filename ?? `image-${image.id}`).replace(/\.\w+$/, '');
-      a.href = url;
-      a.download = `${baseName}.${fmt}`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const blob = await downloadImage(image.id, fmt);
+      saveBlobAs(blob, downloadFileName(image, fmt));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'No se pudo descargar la imagen.';
       setDownloadError(msg);

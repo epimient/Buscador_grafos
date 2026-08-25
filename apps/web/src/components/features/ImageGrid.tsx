@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, X } from 'lucide-react';
 import { ImageCard } from './ImageCard';
 import { Skeleton } from '@/components/ui/Skeleton';
+import { downloadFileName, saveBlobAs } from '@/lib/utils';
+import { downloadImage } from '@/services/api';
 import type { Image } from '@/types/image';
 
 interface PageLike {
@@ -35,19 +37,8 @@ export function ImageGrid({ pages, loading = false, loadingMore = false }: Props
   async function triggerDownload(image: Image) {
     setError(null);
     try {
-      const res = await fetch(`/api/images/${image.id}/download?format=webp`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? `Error ${res.status}`);
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const baseName = (image.filename ?? `image-${image.id}`).replace(/\.\w+$/, '');
-      a.href = url;
-      a.download = `${baseName}.webp`;
-      a.click();
-      URL.revokeObjectURL(url);
+      const blob = await downloadImage(image.id, 'webp');
+      saveBlobAs(blob, downloadFileName(image, 'webp'));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Error desconocido';
       setError(`No se pudo descargar: ${msg}`);

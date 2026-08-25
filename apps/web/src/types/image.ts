@@ -50,3 +50,6 @@ export interface ActiveFilters {
   mood?: string;
   use_case?: string;
 }
+
+/** Formats accepted by GET /api/images/:id/download (see apps/api/src/routes/images.ts). */
+export type DownloadFormat = 'webp' | 'png' | 'jpg';
