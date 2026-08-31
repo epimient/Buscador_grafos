@@ -1,5 +1,5 @@
 import { Link, NavLink } from 'react-router-dom';
-import { BarChart3, ImageIcon, Tag } from 'lucide-react';
+import { BarChart3, ImageIcon, Tag, Network } from 'lucide-react';
 import { SearchBar } from '@/components/features/SearchBar';
 import { cn } from '@/lib/utils';
 
@@ -36,6 +36,10 @@ export function Header() {
           <NavLink to="/stats" className={navLinkClass}>
             <BarChart3 className="h-4 w-4" />
             Stats
+          </NavLink>
+          <NavLink to="/graph" className={navLinkClass}>
+            <Network className="h-4 w-4" />
+            Red
           </NavLink>
         </nav>
       </div>

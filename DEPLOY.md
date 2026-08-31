@@ -75,6 +75,12 @@ plataforma, así que no sirve copiar el `node_modules` de Windows:
 sudo -u www-data npm install --omit=dev
 ```
 
+Si se usa `METADATA_EMBED=exiftool` en `.env`, instalar exiftool en el servidor:
+
+```bash
+sudo apt install libimage-exiftool-perl
+```
+
 Arrancar como servicio:
 
 ```bash

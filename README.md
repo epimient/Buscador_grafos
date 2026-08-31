@@ -46,6 +46,18 @@ pnpm dev
 Abrir **http://localhost:5173/vorael/** — con la sub-ruta incluida, que es la
 `base` de Vite.
 
+## Motor de búsqueda
+
+Búsqueda por grafo in-memory (Graphology) sincronizado con PostgreSQL via reload
+periódico. Ver [docs/PLAN_GRAFOS.md](docs/PLAN_GRAFOS.md) para decisiones y
+[ARQUITECTURA.md §Motor de grafos](ARQUITECTURA.md) para detalles técnicos.
+
+## Metadatos incrustados
+
+Las imágenes pueden llevar metadatos XMP/EXIF/IPTC incrustados (namespace
+`XMP-vorael:`), equivalentes al frontmatter YAML de Obsidian. Ver
+[ARQUITECTURA.md §3.6.1](ARQUITECTURA.md).
+
 ## Scripts
 
 | Comando | Qué hace |
@@ -54,15 +66,23 @@ Abrir **http://localhost:5173/vorael/** — con la sub-ruta incluida, que es la
 | `pnpm dev:api` · `pnpm dev:web` | una sola app |
 | `pnpm build` | compila ambas |
 | `pnpm build:api` · `pnpm build:web` | compila una |
+| `pnpm test` | ejecuta tests de la API (Vitest) |
+| `pnpm test:watch` | tests en modo watch |
+| `pnpm test:coverage` | tests con cobertura |
 | `pnpm release` | empaqueta `release/vorael-{web,api}.tar.gz` |
+| `pnpm export-portable` | genera carpeta `export-vorael/` con imágenes enriquecidas |
+| `pnpm backfill` | reemplaza archivos en S3 con metadatos (requiere `ALLOW_BACKFILL_WRITE=true`) |
+| `pnpm scan` | reconstruye el grafo desde archivos (recovery) |
 
 ## Documentación
 
 - **[ARQUITECTURA.md](ARQUITECTURA.md)** — cómo funciona, a dónde se conecta,
-  las rutas del API, el esquema de la tabla, las variables de entorno y los
-  detalles de la sub-ruta `/vorael/`.
+  las rutas del API, el esquema de la tabla, las variables de entorno, motor de
+  grafos y detalles de la sub-ruta `/vorael/`.
 - **[DEPLOY.md](DEPLOY.md)** — despliegue paso a paso en el servidor: Nginx,
-  systemd, estructura de directorios y verificación.
+  systemd, estructura de directorios, exiftool y verificación.
+- **[docs/PLAN_GRAFOS.md](docs/PLAN_GRAFOS.md)** — decisiones de diseño del
+  motor de búsqueda por grafos y plan de implementación.
 
 ## Secretos
 

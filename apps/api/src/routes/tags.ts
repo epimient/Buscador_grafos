@@ -1,5 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { pool } from '../db';
+import { query } from '../db';
+import { graphStore, tagsList as graphTagsList, tagImages as graphTagImages } from '../graph';
+import { config } from '../config';
 
 export const tagsRouter = Router();
 
@@ -7,7 +9,16 @@ export const tagsRouter = Router();
 tagsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = Math.min(500, Math.max(1, Number(req.query.limit ?? 200)));
-    const { rows } = await pool.query(
+
+    if (config.graph.engine === 'graph' && graphStore.ready) {
+      const snap = graphStore.snapshot!;
+      const result = graphTagsList(snap, limit);
+      res.json(result);
+      return;
+    }
+
+    // Fallback SQL
+    const { rows } = await query(
       `
       SELECT tag, COUNT(*)::int AS count
       FROM (
@@ -32,8 +43,16 @@ tagsRouter.get('/:tag/images', async (req: Request, res: Response, next: NextFun
     const tag = String(req.params.tag);
     const page = Math.max(1, Number(req.query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 24)));
-    const offset = (page - 1) * limit;
 
+    if (config.graph.engine === 'graph' && graphStore.ready) {
+      const snap = graphStore.snapshot!;
+      const result = graphTagImages(snap, tag, { page, limit });
+      res.json(result);
+      return;
+    }
+
+    // Fallback SQL
+    const offset = (page - 1) * limit;
     const countSql = `SELECT COUNT(*)::int AS total FROM generated_images WHERE tags && ARRAY[$1]::text[]`;
     const dataSql = `
       SELECT id, s3_key, s3_url, original_prompt, enhanced_prompt, tags, style, subject,
@@ -44,8 +63,8 @@ tagsRouter.get('/:tag/images', async (req: Request, res: Response, next: NextFun
       LIMIT ${limit} OFFSET ${offset}
     `;
     const [countRes, dataRes] = await Promise.all([
-      pool.query(countSql, [tag]),
-      pool.query(dataSql, [tag]),
+      query(countSql, [tag]),
+      query(dataSql, [tag]),
     ]);
     const total = countRes.rows[0].total as number;
     res.json({

@@ -1,5 +1,6 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { pool } from '../db';
+import { graphStore, search as graphSearch } from '../graph';
+import { config } from '../config';
 
 export const searchRouter = Router();
 
@@ -9,14 +10,29 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const page = Math.max(1, Number(req.query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 24)));
-    const offset = (page - 1) * limit;
 
     if (!q) {
       res.json({ items: [], page, limit, total: 0, hasMore: false, q });
       return;
     }
 
-    // Tokenize the query into terms for tag overlap; ILIKE pattern for subject/prompts.
+    if (config.graph.engine === 'graph' && graphStore.ready) {
+      const snap = graphStore.snapshot!;
+      const result = graphSearch(snap, q, { page, limit });
+      res.json({
+        items: result.items,
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        hasMore: result.hasMore,
+        q,
+      });
+      return;
+    }
+
+    // Fallback SQL
+    const { query } = await import('../db');
+    const offset = (page - 1) * limit;
     const terms = q
       .toLowerCase()
       .split(/\s+/)
@@ -24,10 +40,6 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
       .filter((t) => t.length > 0);
     const ilike = `%${q}%`;
 
-    // Score each row by how strongly it matches:
-    //  - tag overlap count (cardinality of intersect)
-    //  - subject ILIKE match
-    //  - prompt ILIKE matches
     const where = `
       tags && $1::text[]
       OR subject ILIKE $2
@@ -53,8 +65,8 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
     const countSql = `SELECT COUNT(*)::int AS total FROM generated_images WHERE ${where}`;
 
     const [countRes, dataRes] = await Promise.all([
-      pool.query(countSql, [terms, ilike]),
-      pool.query(dataSql, [terms, ilike]),
+      query(countSql, [terms, ilike]),
+      query(dataSql, [terms, ilike]),
     ]);
 
     const total = countRes.rows[0].total as number;

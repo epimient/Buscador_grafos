@@ -18,6 +18,7 @@ function optional(name: string, fallback: string): string {
 }
 
 export const config = {
+  mock: optional('DB_MOCK', 'false').toLowerCase() === 'true',
   db: {
     host: required('DB_HOST'),
     port: Number(optional('DB_PORT', '5432')),
@@ -35,9 +36,14 @@ export const config = {
   },
   server: {
     port: Number(optional('PORT', '3001')),
-    // Detrás de Nginx el API no debe quedar expuesto al exterior: por defecto
-    // escucha solo en loopback. Usar 0.0.0.0 únicamente si se accede directo.
     host: optional('HOST', '127.0.0.1'),
     corsOrigin: optional('CORS_ORIGIN', '*'),
+  },
+  graph: {
+    refreshMs: Number(optional('GRAPH_REFRESH_MS', '60000')),
+    engine: optional('SEARCH_ENGINE', 'graph') as 'graph' | 'sql',
+  },
+  metadata: {
+    embed: optional('METADATA_EMBED', 'none') as 'exiftool' | 'none',
   },
 };

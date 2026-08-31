@@ -1,0 +1,26 @@
+%Image::ExifTool::UserDefined = (
+  'Image::ExifTool::XMP::Main' => {
+    vorael => {
+      SubDirectory => {
+        TagTable => 'Image::ExifTool::UserDefined::vorael',
+      },
+    },
+  },
+);
+
+# Namespace XMP-vorael: campos propios de VORAEL
+# Equivalente a frontmatter YAML de Obsidian: style, mood, use_case, etc.
+%Image::ExifTool::UserDefined::vorael = (
+  GROUPS => { 0 => 'XMP', 1 => 'XMP-vorael', 2 => 'Image' },
+  NAMESPACE => { 'vorael' => 'https://americana.edu.co/vorael/' },
+  WRITABLE => 'string',
+  id        => { Writable => 'string', Name => 'ImageID' },
+  style     => { Writable => 'string', Name => 'Style' },
+  mood      => { Writable => 'string', Name => 'Mood' },
+  useCase   => { Writable => 'string', Name => 'UseCase' },
+  palette   => { Writable => 'string', Name => 'ColorPalette' },
+  fileName  => { Writable => 'string', Name => 'FileName' },
+  createdAt => { Writable => 'string', Name => 'CreatedAt' },
+);
+
+1; # end

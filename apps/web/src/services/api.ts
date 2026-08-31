@@ -94,6 +94,36 @@ export async function fetchStats(): Promise<Stats> {
   return data;
 }
 
+export interface GraphNode {
+  id: string;
+  type: 'image' | 'tag' | 'style' | 'mood' | 'useCase' | 'color';
+  label: string;
+  size: number;
+  color: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  type: string;
+  weight: number;
+}
+
+export interface GraphExport {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export async function fetchGraph(params: {
+  types?: string[];
+  limit?: number;
+  center?: string;
+  hops?: number;
+}): Promise<GraphExport> {
+  const { data } = await api.get<GraphExport>('/api/graph', { params });
+  return data;
+}
+
 // The endpoint pulls the original from S3 and re-encodes it with sharp
 // (lossless WebP / PNG level 0 / JPEG q100), so big images take a while —
 // Nginx allows 120s for it (deploy/nginx-vorael.conf). The instance-wide 20s

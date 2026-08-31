@@ -1,381 +1,586 @@
-# VORAEL — Arquitectura
+# VORAEL — Documentación Técnica
 
-Banco de imágenes generadas por IA de la Corporación Universitaria Americana.
-Es un catálogo de **solo lectura**: no genera imágenes ni las sube. Lee una
-tabla de Postgres que otro proceso (un flujo de n8n) ya llenó, y sirve los
-archivos que viven en DigitalOcean Spaces.
+Catálogo de imágenes generadas por IA de la Corporación Universitaria Americana.
+Sistema de solo lectura: no genera imágenes ni las sube. Lee una tabla de
+PostgreSQL que llena un flujo externo de n8n, y sirve archivos almacenados en
+DigitalOcean Spaces.
 
-En producción se sirve como sub-ruta: **https://n8n.americana.edu.co/vorael/**
-
-Para los pasos de despliegue, ver [DEPLOY.md](DEPLOY.md). Este documento explica
-**cómo funciona y a dónde se conecta**.
+Producción: **https://n8n.americana.edu.co/vorael/**
 
 ---
 
-## 1. Panorama
+## 1. Stack tecnológico
 
-```
-                    ┌──────────────────────────────────────────────┐
-   Navegador ───────┤  Nginx · n8n.americana.edu.co  (HTTPS 443)   │
-        │           └───┬─────────────────────────┬────────────────┘
-        │               │                         │
-        │       /vorael/*  (estáticos)     /vorael/api/*  (proxy_pass)
-        │               │                         │
-        │               ▼                         ▼
-        │      /var/www/html/vorael/dist    127.0.0.1:3001
-        │       SPA React + Vite            API Express (systemd)
-        │                                          │
-        │                                   ┌──────┴───────┐
-        │                                   ▼              ▼
-        │                              PostgreSQL     DigitalOcean
-        │                          generated_images   Spaces (S3)
-        │                                              bucket n8ns3
-        │                                                   │
-        └───────────────────────────────────────────────────┘
-              las miniaturas se cargan directo desde Spaces
-                    (s3_url, no pasan por Nginx)
-```
+### Backend (`apps/api`)
 
-Dos piezas propias, dos servicios externos:
+| Componente | Tecnología | Versión | Propósito |
+|---|---|---|---|
+| Runtime | Node.js | ≥ 20 | Ejecución del API |
+| Framework | Express | 4.x | HTTP server, routing, middleware |
+| Lenguaje | TypeScript | 5.x | Type safety, CommonJS modules |
+| Base de datos | PostgreSQL | — | Tabla `generated_images` (solo lectura) |
+| Cliente DB | pg (node-postgres) | — | Pool de conexiones (máx. 10) |
+| Objeto storage | DigitalOcean Spaces (S3) | AWS SDK v3 | Bajar/convertir imágenes |
+| Procesamiento de imagen | Sharp | — | Conversión WebP/PNG/JPG, redimensión |
+| Motor de grafos | Graphology | 0.26.x | Grafo in-memory para búsqueda y relaciones |
+| Incrustación de metadatos | ExifTool (binario) | — | Leer/escribir EXIF, IPTC, XMP |
+| Testing | Vitest | 4.x | Unit + integration tests |
+| Benchmark | Custom script | — | Comparación SQL vs grafo |
 
-| Pieza | Qué es | Puerto / Ruta |
-|---|---|---|
-| `apps/web` | SPA React 18 + Vite + Tailwind | estáticos bajo `/vorael/` |
-| `apps/api` | API Express + TypeScript | `127.0.0.1:3001`, expuesto en `/vorael/api/` |
-| PostgreSQL | tabla `generated_images` (metadatos) | `DB_PORT=9913` |
-| DigitalOcean Spaces | los archivos de imagen | `sfo3.digitaloceanspaces.com`, bucket `n8ns3` |
+### Frontend (`apps/web`)
 
-Todo entra por el **mismo origen**, así que el navegador nunca hace una petición
-cross-origin y CORS no interviene en producción.
+| Componente | Tecnología | Versión | Propósito |
+|---|---|---|---|
+| Framework | React | 18.x | UI declarativa |
+| Bundler | Vite | 6.x | Dev server, HMR, build optimizado |
+| Lenguaje | TypeScript | 5.x | Type safety |
+| Estilos | Tailwind CSS | 3.x | Utility-first CSS |
+| Data fetching | TanStack Query | 5.x | Cache, revalidación, infinite scroll |
+| Animaciones | Framer Motion | — | Transiciones suaves |
+| Iconos | lucide-react | — | Iconografía ligera |
+| Grafo interactivo | Sigma.js | 3.x | Renderizado WebGL de grafos |
+| Grafo (datoss) | Graphology | 0.26.x | Estructura de datos para sigma |
+| HTTP client | Axios | — | Requests con timeout, interceptores |
+| Routing | React Router | 6.x | SPA routing con basename |
 
----
+### Herramientas de desarrollo
 
-## 2. A dónde se conecta
-
-### 2.1 PostgreSQL — de dónde salen los datos
-
-El API abre un pool `pg` (máx. 10 conexiones) en [db.ts](apps/api/src/db.ts) y
-consulta **una sola tabla**: `generated_images`. VORAEL nunca escribe en ella.
-
-Columnas que el código espera ([types.ts](apps/api/src/types.ts)):
-
-| Columna | Tipo | Uso en la app |
-|---|---|---|
-| `id` | uuid / text | clave, ruta `/image/:id` |
-| `s3_key` | text | clave del objeto en Spaces; la usa la descarga |
-| `s3_url` | text | URL pública; es la que carga el `<img>` del grid |
-| `original_prompt` | text | se muestra y se busca (ILIKE) |
-| `enhanced_prompt` | text | se muestra y se busca (ILIKE) |
-| `tags` | `text[]` | chips, `/tags`, `/tag/:tag`, puntaje de búsqueda |
-| `style` | text | filtro y faceta |
-| `subject` | text | título de la tarjeta; se busca (ILIKE) |
-| `mood` | text | filtro y faceta |
-| `color_palette` | `text[]` | se muestra en el detalle |
-| `use_case` | text | filtro y faceta |
-| `filename` | text | nombre sugerido al descargar |
-| `created_at` | timestamp | orden por defecto (`DESC`) |
-
-`tags` y `color_palette` deben ser **arrays de Postgres**, no strings: las
-consultas usan operadores de array (`&&`, `UNNEST`, `cardinality`).
-
-> `s3_url` tiene que ser `https://`. Si es `http://`, el navegador bloquea el
-> contenido mixto en una página servida por HTTPS y el grid sale vacío.
-
-### 2.2 DigitalOcean Spaces — de dónde salen los archivos
-
-Se accede por dos caminos distintos, a propósito:
-
-- **Ver (grid y detalle)** — el `<img>` apunta a `s3_url` directo. No pasa por
-  Nginx ni por el API: menos carga en el servidor y cacheo del CDN de Spaces.
-- **Descargar** — `GET /api/images/:id/download` sí pasa por el API: baja el
-  objeto con `s3_key`, lo reconvierte con `sharp` al formato pedido (WebP
-  lossless / PNG sin compresión / JPG al 100 %) y lo devuelve con
-  `Content-Disposition: attachment`. Por eso las credenciales de Spaces solo las
-  necesita el backend.
-
-[s3.ts](apps/api/src/s3.ts) normaliza `S3_ENDPOINT`: si alguien lo configura con
-el bucket como prefijo (`n8ns3.sfo3...`) lo recorta, porque el SDK ya añade el
-bucket como subdominio y saldría `n8ns3.n8ns3.sfo3...`.
-
-Hay un helper `presignDownload()` para URLs firmadas que **hoy no usa ninguna
-ruta**; queda disponible si en algún momento se quiere delegar la descarga a
-Spaces en vez de proxearla.
-
-### 2.3 Quién llena la base
-
-Fuera de este repositorio. El dominio (`n8n.americana.edu.co`) y el bucket
-(`n8ns3`) apuntan a un flujo de **n8n** que genera las imágenes, las sube a
-Spaces y escribe la fila en `generated_images`. VORAEL es solo el escaparate: si
-el flujo se detiene, la galería sigue funcionando pero deja de crecer.
-
----
-
-## 3. El API
-
-Express 4 + TypeScript (CommonJS). Punto de entrada
-[index.ts](apps/api/src/index.ts). Todas las rutas devuelven JSON y van montadas
-bajo `/api`.
-
-| Método y ruta | Qué devuelve |
+| Herramienta | Propósito |
 |---|---|
-| `GET /api/health` | `{ ok: true, ts }` — sonda de vida |
-| `GET /api/images` | listado paginado. Query: `page`, `limit` (máx. 100, def. 24), `style`, `mood`, `use_case` |
-| `GET /api/images/:id` | una imagen completa, o 404 |
-| `GET /api/images/:id/download` | el archivo convertido. Query: `format=webp\|png\|jpg` (def. `webp`) |
-| `GET /api/images/:id/related` | relacionadas por tags/estilo. Query: `limit` (máx. 24, def. 8) |
-| `GET /api/search` | búsqueda con puntaje. Query: `q`, `page`, `limit` |
-| `GET /api/tags` | tags únicos con conteo. Query: `limit` (máx. 500, def. 200) |
-| `GET /api/tags/:tag/images` | imágenes con ese tag, paginado |
-| `GET /api/filters` | facetas: `styles`, `moods`, `useCases`, cada una con conteo |
-| `GET /api/stats` | total + top 10 estilos, top 10 moods, top 20 tags |
+| pnpm | Gestor de paquetes, workspaces monorepo |
+| ts-node-dev | Hot-reload del API en desarrollo |
+| Vitest | Tests con cobertura |
+| Supertest | Tests de endpoints HTTP |
+| ExifTool | Manipulación de metadatos en imágenes |
 
-Forma de las respuestas paginadas:
+---
 
-```json
-{ "items": [], "page": 1, "limit": 24, "total": 1234, "hasMore": true }
+## 2. Arquitectura del sistema
+
+### 2.1 Diagrama de componentes
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         PRODUCCIÓN                                  │
+│                                                                     │
+│   Navegador ──────── Nginx (n8n.americana.edu.co, HTTPS 443)       │
+│        │                    │                    │                   │
+│        │              /vorael/*            /vorael/api/*             │
+│        │              (estáticos)          (proxy_pass)              │
+│        │                    │                    │                   │
+│        │                    ▼                    ▼                   │
+│        │          React SPA (Vite)      Express API (:3001)         │
+│        │          Tailwind + Sigma        pg pool + Sharp           │
+│        │                                      │                     │
+│        │                               ┌──────┴──────┐              │
+│        │                               ▼              ▼              │
+│        │                          PostgreSQL     DigitalOcean       │
+│        │                      generated_images   Spaces (S3)        │
+│        │                                          bucket n8ns3      │
+│        │                                                           │
+│        └───────────── las imágenes se cargan directo desde Spaces ─┘
 ```
 
-`/api/search` añade `q`; `/api/tags/:tag/images` añade `tag`.
+### 2.2 Flujo de datos
 
-### 3.1 Cómo puntúa la búsqueda
+```
+1. EXTERNO (fuera de este repo)
+   ┌──────────────────────────────────────────────────┐
+   │  Flujo n8n genera imágenes                       │
+   │  → Sube archivos a DigitalOcean Spaces (S3)      │
+   │  → Escribe fila en generated_images (PostgreSQL)  │
+   └──────────────────────────────────────────────────┘
 
-[search.ts](apps/api/src/routes/search.ts) no usa `tsvector`: parte la consulta
-en términos y suma un puntaje por fila.
+2. BACKEND (apps/api)
+   ┌──────────────────────────────────────────────────┐
+   │  Al arrancar:                                     │
+   │  → Conecta a PostgreSQL (pool pg, máx. 10)       │
+   │  → Carga grafo in-memory (Graphology)             │
+   │  → Inicia timer de refresh cada 60s               │
+   │  → Escucha en 127.0.0.1:3001                     │
+   │                                                   │
+   │  En cada request:                                 │
+   │  → /api/images: SQL directo (paginación)          │
+   │  → /api/search, /tags, /related, /filters, /stats │
+   │    → Lee del grafo en memoria                     │
+   │    → Fallback a SQL si grafo no está listo        │
+   │  → /api/images/:id/download                       │
+   │    → Baja imagen de S3                            │
+   │    → Convierte con Sharp (WebP/PNG/JPG)           │
+   │    → Incrusta metadatos EXIF/IPTC/XMP (exiftool)  │
+   │    → Devuelve binario con Content-Disposition      │
+   │  → /api/graph                                     │
+   │    → Serializa nodos y aristas del grafo          │
+   │    → Filtra por tipos, soporta ego-graph          │
+   └──────────────────────────────────────────────────┘
+
+3. FRONTEND (apps/web)
+   ┌──────────────────────────────────────────────────┐
+   │  React SPA con Vite                               │
+   │  → Gallery: grid con scroll infinito + filtros    │
+   │  → Search: resultados puntuados por relevancia    │
+   │  → ImageDetail: prompts, paleta, descarga         │
+   │  → Graph: red interactiva con sigma.js (WebGL)    │
+   │  → Tags, Stats, Related                           │
+   │  → Todo vía axios → proxy Vite → API Express      │
+   └──────────────────────────────────────────────────┘
+```
+
+### 2.3 Flujo de una descarga con metadatos
+
+```
+Navegador                         API                           ExifTool
+    │                               │                              │
+    │  GET /api/images/:id/download │                              │
+    │  ?format=webp                 │                              │
+    │ ──────────────────────────────>│                              │
+    │                               │  1. Busca imagen en DB       │
+    │                               │  2. Baja archivo de S3       │
+    │                               │  3. Convierte con Sharp      │
+    │                               │     → buffer en memoria      │
+    │                               │                              │
+    │                               │  4. Exec exiftool -overwrite │
+    │                               │     original -all=...        │
+    │                               │ ────────────────────────────>│
+    │                               │                              │
+    │                               │  5. Exiftool escribe:        │
+    │                               │     - EXIF:ImageDescription  │
+    │                               │     - EXIF:Artist            │
+    │                               │     - IPTC:Keywords          │
+    │                               │     - XMP:Subject            │
+    │                               │     - XMP-vorael:* (custom)  │
+    │                               │                              │
+    │                               │<─── archivo modificado ──────│
+    │                               │                              │
+    │  <── binario (image/webp) ────│                              │
+    │  Content-Disposition: att.    │                              │
+    │                               │                              │
+```
+
+---
+
+## 3. Sistema de metadatos incrustados
+
+### 3.1 Concepto
+
+Cada imagen puede llevar metadatos incrustados en sus cabeceras EXIF, IPTC y XMP.
+Esto es equivalente al frontmatter YAML de Obsidian: datos estructurados que
+viven dentro del propio archivo y que cualquier herramienta de metadatos puede
+leer (Adobe Bridge, Lightroom, ExifTool, etc.).
+
+### 3.2 Namespace XMP-vorael (metadatos propios)
+
+Definido en [`.ExifTool_config`](apps/api/.ExifTool_config), es un namespace XMP
+personalizado que almacena los campos específicos de VORAEL:
+
+| Campo XMP | Tipo | Descripción | Ejemplo |
+|---|---|---|---|
+| `vorael:id` | string | ID de la imagen en PostgreSQL | `img-001` |
+| `vorael:style` | string | Estilo artístico | `Photorealistic` |
+| `vorael:mood` | string | Estado emocional | `Calm` |
+| `vorael:useCase` | string | Caso de uso sugerido | `Wallpaper` |
+| `vorael:palette` | string | Paleta de colores (hex, coma-separado) | `#FFD700, #8B4513` |
+| `vorael:fileName` | string | Nombre original del archivo | `cat-sunset.webp` |
+| `vorael:createdAt` | string | Timestamp ISO 8601 | `2026-01-15T10:30:00Z` |
+
+### 3.3 Campos estándar (compatibilidad universal)
+
+Además del namespace propio, se incrustan campos que cualquier herramienta entiende:
+
+| Campo estándar | Origen | Uso |
+|---|---|---|
+| `EXIF:ImageDescription` | enhanced_prompt (fallback: original_prompt) | Descripción de la imagen |
+| `EXIF:Artist` | Literal: "Corporación Universitaria Americana - VORAEL" | Autor |
+| `IPTC:Keywords` | tags (uno por keyword) | Palabras clave para búsqueda |
+| `XMP:Subject` | subject | Título/asunto de la imagen |
+| `XMP:Title` | subject | Título visible en herramientas |
+
+### 3.4 Flujo de incrustación (embed)
+
+Cuando se descarga una imagen (`/api/images/:id/download`):
+
+1. **Sharp convierte** el buffer original al formato solicitado (WebP lossless,
+   PNG sin compresión, JPG al 100%).
+2. **Se ejecuta exiftool** con el flag `-overwrite_original` para modificar el
+   buffer en memoria.
+3. **Se escriben** los campos estándar (EXIF, IPTC, XMP) y el namespace
+   `XMP-vorael:*` con todos los metadatos de la imagen.
+4. **Si exiftool falla** o no está instalado, la imagen se entrega sin metadatos
+   (degradación silenciosa, sin error al usuario).
+5. **Si el modo es mock** (DB_MOCK=true), se lee el archivo local de `test-images/`
+   en lugar de S3.
+
+### 3.5 Flujo de lectura (read)
+
+El sistema puede leer metadatos de imágenes existentes:
+
+1. **ExifTool** extrae todos los campos XMP/EXIF/IPTC del buffer.
+2. **Se parsea** el namespace `XMP-vorael:*` para obtener los campos propios.
+3. **Se retornan** tanto los campos estándar (description, artist, tags) como los
+   campos custom (style, mood, useCase, palette, id, fileName, createdAt).
+4. **Si no hay metadatos vorael**, `hasVoraelMeta: false` y campos vacíos.
+
+### 3.6 Scripts de gestión de metadatos
+
+| Script | Comando | Qué hace |
+|---|---|---|
+| `export-portable.ts` | `pnpm export-portable` | Exporta imágenes de S3 a carpeta local `export-vorael/` con metadatos incrustados. **Solo lectura** (no modifica S3). |
+| `backfill.ts` | `pnpm backfill` | Reescribe archivos en S3 con metadatos incrustados. **Requiere** `ALLOW_BACKFILL_WRITE=true` y probe de PutObject exitoso. |
+| `scanner.ts` | `pnpm scan` | Reconstruye el grafo in-memory desde archivos de imagen (recovery mode). Soporta `--mock` para testing. |
+
+### 3.7 Degradación y robustez
+
+- Si **exiftool no está instalado**: las imágenes se sirven sin metadatos.
+  Ningún endpoint falla. El sistema detecta exiftool al arrancar y cachea el
+  resultado.
+- Si **exiftool falla** durante la incrustación: se entrega la imagen original
+  sin metadatos附加. Se loguea el error.
+- Si **no hay metadatos vorael** en una imagen: `readImageMetadata` retorna
+  `hasVoraelMeta: false` y campos estándar vacíos.
+- Si **el modo es mock**: se usan archivos locales de `test-images/` (placeholders
+  generados con Sharp), sin dependencia de S3 ni PostgreSQL.
+
+---
+
+## 4. Motor de búsqueda por grafos
+
+### 4.1 Concepto
+
+Las rutas de búsqueda, tags, filtros, stats y related leen de un grafo en memoria
+(Graphology) sincronizado con PostgreSQL cada 60 segundos. Esto permite:
+- **Búsqueda por token-match** con scoring por relevancia
+- **Relaciones multihop** para imágenes relacionadas
+- **Co-ocurrencia de tags** para descubrimiento
+- **Exploración visual** vía grafo interactivo (sigma.js)
+
+### 4.2 Estructura del grafo
+
+**Nodos:**
+
+| Tipo | Ejemplo | Color | Fuente |
+|---|---|---|---|
+| `image` | `img-001` | `#6366f1` (indigo) | `id` de la imagen |
+| `tag` | `tag:cat` | `#f59e0b` (amber) | Cada tag del array `tags` |
+| `style` | `style:Photorealistic` | `#22c55e` (green) | Campo `style` |
+| `mood` | `mood:Calm` | `#a855f7` (purple) | Campo `mood` |
+| `useCase` | `ucase:Wallpaper` | `#06b6d4` (cyan) | Campo `use_case` |
+| `color` | `color:#FFD700` | `#6b7280` (gray) | Cada color de `color_palette` |
+
+**Aristas:**
+
+| Tipo | Dirección | Descripción |
+|---|---|---|
+| `TAGGED_WITH` | Image → Tag | Imagen tiene tag |
+| `HAS_STYLE` | Image → Style | Imagen tiene estilo |
+| `HAS_MOOD` | Image → Mood | Imagen tiene mood |
+| `HAS_USECASE` | Image → UseCase | Imagen tiene caso de uso |
+| `HAS_COLOR` | Image → Color | Imagen usa color |
+| `CO_OCCURS_WITH` | Tag → Tag | Dos tags aparecen juntos (peso = frecuencia) |
+
+### 4.3 Índices de apoyo
+
+Además de Graphology, el motor mantiene:
+
+- `Map<id, ImageRow>` — acceso rápido a fila completa para servir items
+- `Map<dimension, Set<id>>` — invertido por tag/style/mood/use_case/color
+- Texto tokenizado por imagen (minúsculas, frontera de palabra + plural mínimo)
+- Lista global ordenada `(created_at DESC, id DESC)` — paginado determinista
+
+### 4.4 Sincronización
+
+- **Arranque:** carga completa de `generated_images`.
+- **Periodicidad:** timer cada `GRAPH_REFRESH_MS` (def. 60s) compara watermark
+  barato (`MAX(created_at)`, `COUNT`). Si cambió → rebuild completo + atomic
+  swap. Nunca se ve un grafo a medias.
+- **Fallback:** mientras no esté listo o ante rebuild fallido, las rutas migradas
+  sirven desde SQL. Se conserva el último snapshot válido.
+
+### 4.5 Búsqueda con token-match
+
+Cada término de la query debe aparecer como **palabra completa** en
+`subject`/`original_prompt`/`enhanced_prompt` (no como subcadena `%q%` que pegaba
+en "categoría"). Tags siguen siendo overlap exacto (array).
 
 | Coincidencia | Puntos |
 |---|---|
 | cada tag que solapa (`tags && terms`) | 3 |
-| `subject ILIKE %q%` | 2 |
-| `original_prompt ILIKE %q%` | 1 |
-| `enhanced_prompt ILIKE %q%` | 1 |
+| `subject` contiene el término | 2 |
+| `original_prompt` contiene el término | 1 |
+| `enhanced_prompt` contiene el término | 1 |
 
-Ordena por `score DESC, created_at DESC`. Los ILIKE con comodín inicial no usan
-índice: si la tabla crece mucho, aquí es donde conviene pasar a búsqueda de
-texto completo o a un índice `pg_trgm`.
+Orden: `score DESC, created_at DESC, id DESC`.
 
-`/api/images/:id/related` puntúa parecido: tags que solapan + 1 si comparte
-estilo, excluyendo la imagen de origen.
+### 4.6 Related (recomendaciones)
 
-### 3.2 Notas de implementación
+El motor de grafo calcula similitud multihop:
+1. Intersección de vecinos compartidos (Jaccard simplificado sobre tags, style,
+   mood, use_case, color).
+2. Bonus por co-ocurrencia fuerte entre tags (`CO_OCCURS_WITH` con peso > 0).
+3. Excluye la imagen de origen.
 
-- **Errores** — cada ruta hace `next(err)` y un handler central responde 500 con
-  `{ error }`. Una ruta sin match devuelve 404 con `{ error, path }`.
-- **`trust proxy`** — activado, para que `req.ip` y `req.protocol` reflejen las
-  cabeceras `X-Forwarded-*` que pone Nginx.
-- **Config tolerante** — [config.ts](apps/api/src/config.ts) *avisa* pero no
-  aborta si falta una variable. El proceso arranca y `/api/health` responde
-  aunque Postgres esté mal configurado; el fallo aparece al pedir datos. Útil
-  para diagnosticar, pero conviene mirar el log al arrancar.
-- **`limit`/`offset` interpolados** — van directo al SQL, no como parámetros.
-  Son seguros porque pasan por `Number()` + `Math.min/max` antes. Los valores de
-  usuario (`style`, `mood`, `q`, `tag`, `id`) sí van parametrizados.
+### 4.7 Variables de entorno
+
+| Variable | Defecto | Uso |
+|---|---|---|
+| `GRAPH_REFRESH_MS` | `60000` | Intervalo de refresh del grafo (ms) |
+| `SEARCH_ENGINE` | `graph` | `graph` (motor en memoria) o `sql` (rollback) |
+| `METADATA_EMBED` | `none` | `exiftool` (incrustar EXIF/IPTC) o `none` |
+| `DB_MOCK` | `false` | `true` para modo mock (sin PostgreSQL/S3) |
 
 ---
 
-## 4. El front
+## 5. Vista de grafo interactivo (`/vorael/graph`)
 
-React 18 + Vite 5 + TypeScript + Tailwind 3. Datos con TanStack Query,
-animaciones con Framer Motion, iconos con lucide-react.
+### 5.1 Endpoint API
 
-### 4.1 Rutas
+`GET /api/graph` serializa el grafo en memoria para visualización.
 
-Definidas en [App.tsx](apps/web/src/App.tsx), todas dentro de un `Layout` común
-(header + footer):
+**Parámetros:**
+
+| Param | Tipo | Defecto | Descripción |
+|---|---|---|---|
+| `types` | string | todos | Filtro por tipo: `image,tag,style,mood,useCase,color` (coma-separado) |
+| `limit` | number | 200 | Máximo de nodos (máx. 500) |
+| `center` | string | — | ID de nodo para ego-graph (vecindario) |
+| `hops` | number | 1 | Profundidad de vecindario (1-3) |
+
+**Respuesta:**
+
+```typescript
+interface GraphExport {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+interface GraphNode {
+  id: string;           // "img-001", "tag:cat", "style:Photorealistic"
+  type: 'image' | 'tag' | 'style' | 'mood' | 'useCase' | 'color';
+  label: string;        // nombre legible
+  size: number;         // grado/conteo (para tamaño visual)
+  color: string;        // hex por tipo
+}
+
+interface GraphEdge {
+  source: string;
+  target: string;
+  type: string;         // "TAGGED_WITH", "HAS_STYLE", "CO_OCCURS_WITH", etc.
+  weight: number;
+}
+```
+
+### 5.2 Frontend (Sigma.js)
+
+- **Renderizado WebGL** via Sigma.js 3 + Graphology
+- **Layout force-directed** (simulación en el cliente)
+- **Toggle de tipos** para mostrar/ocultar nodos por categoría
+- **Click en nodo** para navegar al detalle (imágenes) o filtrar (tags/styles)
+- **Vecindario** al hacer click: resalta conexiones directas
+- **Estadísticas** en tiempo real: nodos/arestas visibles
+- **Responsive** se adapta al tamaño del contenedor
+
+### 5.3 Colores de nodos
+
+| Tipo | Color | Hex |
+|---|---|---|
+| Imagen | Indigo | `#6366f1` |
+| Tag | Ámbar | `#f59e0b` |
+| Style | Verde | `#22c55e` |
+| Mood | Púrpura | `#a855f7` |
+| UseCase | Cian | `#06b6d4` |
+| Color | Gris | `#6b7280` |
+
+---
+
+## 6. Endpoints del API
+
+### 6.1 Tabla de endpoints
+
+| Método y ruta | Query params | Respuesta |
+|---|---|---|
+| `GET /api/health` | — | `{ ok: true, ts: string }` |
+| `GET /api/images` | `page` (def. 1), `limit` (máx. 100, def. 24), `style`, `mood`, `use_case` | `{ items: Image[], page, limit, total, hasMore }` |
+| `GET /api/images/:id` | — | `Image` o `{ error: "Image not found" }` (404) |
+| `GET /api/images/:id/download` | `format=webp\|png\|jpg` (def. `webp`) | Binario (Content-Type: image/...) o `{ error }` |
+| `GET /api/images/:id/related` | `limit` (máx. 24, def. 8) | `{ items: Image[] }` |
+| `GET /api/search` | `q`, `page`, `limit` | `{ items: Image[], page, limit, total, hasMore, q }` |
+| `GET /api/tags` | `limit` (máx. 500, def. 200) | `{ items: TagWithCount[] }` |
+| `GET /api/tags/:tag/images` | `page`, `limit` | `{ items: Image[], page, limit, total, hasMore, tag }` |
+| `GET /api/filters` | — | `{ styles: FilterValue[], moods: FilterValue[], useCases: FilterValue[] }` |
+| `GET /api/stats` | — | `{ total, topStyles: FilterValue[], topMoods: FilterValue[], topTags: TagWithCount[] }` |
+| `GET /api/graph` | `types`, `limit`, `center`, `hops` | `{ nodes: GraphNode[], edges: GraphEdge[] }` |
+
+### 6.2 Forma de los tipos
+
+```typescript
+interface Image {
+  id: string;
+  s3_key: string;
+  s3_url: string;
+  original_prompt: string | null;
+  enhanced_prompt: string | null;
+  tags: string[] | null;
+  style: string | null;
+  subject: string | null;
+  mood: string | null;
+  color_palette: string[] | null;
+  use_case: string | null;
+  filename: string | null;
+  created_at: string;
+}
+
+interface FilterValue {
+  value: string;
+  count: number;
+}
+
+interface TagWithCount {
+  tag: string;
+  count: number;
+}
+```
+
+### 6.3 Manejo de errores
+
+Cada ruta hace `next(err)` y un handler central responde 500 con
+`{ error: string }`. Ruta sin match devuelve 404 con `{ error, path }`.
+
+Errores conocidos:
+- `/api/images/:id` — 404 si el id no existe
+- `/api/images/:id/download` — 404 si no existe, 500 si no tiene `s3_key`
+- `/api/images/:id/related` — 200 con `items: []` si el id no existe
+- `/api/search` — 200 con `items: []` y `total: 0` si `q` está vacío
+- `/api/tags/:tag/images` — 200 con `items: []` si el tag no existe
+
+No hay errores 400/422: los parámetros inválidos se ignoran o se corrigen
+(`page < 1` → 1, `limit > 100` → 100, `format` no válido → `webp`).
+
+---
+
+## 7. Frontend
+
+### 7.1 Rutas
+
+Definidas en [App.tsx](apps/web/src/App.tsx), todas dentro de un Layout común:
 
 | Ruta | Página | Qué hace |
 |---|---|---|
-| `/` | `Gallery` | grid con scroll infinito + panel de filtros; los filtros viven en la query string |
-| `/search?q=…` | `Search` | resultados puntuados, scroll infinito |
-| `/image/:id` | `ImageDetail` | imagen grande, prompts, paleta, tags, descarga con selector de formato, relacionadas |
-| `/tags` | `Tags` | todos los tags como chips |
-| `/tag/:tag` | `TagPage` | grid filtrado por un tag |
-| `/stats` | `Stats` | totales y rankings |
-| `*` | `NotFound` | 404 del cliente |
+| `/` | Gallery | Grid con scroll infinito + panel de filtros |
+| `/search?q=…` | Search | Resultados puntuados, scroll infinito |
+| `/image/:id` | ImageDetail | Imagen grande, prompts, paleta, tags, descarga, relacionadas |
+| `/tags` | Tags | Todos los tags como chips |
+| `/tag/:tag` | TagPage | Grid filtrado por un tag |
+| `/stats` | Stats | Totales y rankings |
+| `/graph` | Graph | Red interactiva con sigma.js (WebGL) |
+| `*` | NotFound | 404 del cliente |
 
-`BrowserRouter` arranca con `basename=/vorael` (desde `VITE_BASE_PATH`), así que
-en el código los enlaces se escriben sin el prefijo (`/tags`, no
-`/vorael/tags`).
+### 7.2 Data fetching
 
-### 4.2 Cómo se piden los datos
+- **Instancia axios** en `services/api.ts` con timeout 20s (120s para downloads)
+- **TanStack Query** con staleTime 30s, gcTime 5min, 1 reintento
+- **Infinite scroll** con IntersectionObserver (rootMargin 600px)
+- **Debounce** 300ms en el buscador
 
-[services/api.ts](apps/web/src/services/api.ts) crea una instancia de axios cuyo
-`baseURL` sale de `VITE_API_URL`, con timeout de 20 s y un interceptor que
-loguea los fallos en consola. Encima van los hooks:
+### 7.3 Diseño
 
-- [useImages.ts](apps/web/src/hooks/useImages.ts) — `useInfiniteQuery` para
-  galería, búsqueda y tag; `useQuery` para detalle y relacionadas.
-- [useFilters.ts](apps/web/src/hooks/useFilters.ts) — facetas, tags y stats, con
-  `staleTime` de 5 min (cambian poco).
-- [useInfiniteScroll.ts](apps/web/src/hooks/useInfiniteScroll.ts) — un
-  `IntersectionObserver` con `rootMargin: 600px` que pide la página siguiente
-  antes de llegar al final. El callback se lee por ref para no recrear el
-  observer en cada render, que dispararía fetches de más.
-- [useDebounce.ts](apps/web/src/hooks/useDebounce.ts) — 300 ms en el buscador,
-  para no navegar en cada tecla.
-
-Defaults de TanStack Query en [main.tsx](apps/web/src/main.tsx): `staleTime`
-30 s, `gcTime` 5 min, sin refetch al enfocar la ventana, 1 reintento.
-
-### 4.3 La sub-ruta `/vorael/` toca cuatro sitios
-
-Es el detalle que más rompe si se cambia. `VITE_BASE_PATH` alimenta:
-
-1. `vite.config.ts` → `base`, el prefijo de los assets compilados.
-2. `main.tsx` → `basename` del `BrowserRouter`.
-3. `deploy/nginx-vorael.conf` → los bloques `location`.
-4. `index.html` → el `href` del favicon, que está **escrito a mano** como
-   `/vorael/favicon.svg`. Si cambia la sub-ruta, hay que editarlo aparte.
-
-[vite.config.ts](apps/web/vite.config.ts) incluye además un plugin propio
-(`redirectBasePath`) que redirige `/vorael` → `/vorael/` en dev y en
-`vite preview`, porque Vite sirve el `index.html` solo en la forma con barra
-final. En producción ese mismo trabajo lo hace el
-`location = /vorael { return 301 /vorael/; }` de Nginx.
-
-### 4.4 Diseño
-
-Tema oscuro fijo (`color-scheme: dark`), definido en
-[tailwind.config.js](apps/web/tailwind.config.js): paleta `canvas` (fondos),
-`accent` (violeta `#7c5cff`), `ink` (texto), sombras `glow`/`card` y un fondo de
-degradados radiales. Tipografías desde Google Fonts: Syne (display), DM Sans
-(texto), JetBrains Mono (prompts). Las clases reutilizables (`.chip`,
-`.btn-primary`, `.btn-ghost`, `.skeleton`, `.glass`) están en
-[index.css](apps/web/src/index.css).
+Tema oscuro fijo (`color-scheme: dark`):
+- **Paleta:** canvas (fondos), accent (violeta `#7c5cff`), ink (texto)
+- **Tipografías:** Syne (display), DM Sans (texto), JetBrains Mono (prompts)
+- **Componentes:** `.chip`, `.btn-primary`, `.btn-ghost`, `.skeleton`, `.glass`
 
 ---
 
-## 5. Desarrollo local
+## 8. Variables de entorno
 
-Requiere **Node ≥ 20** y **pnpm 11**. Es un monorepo pnpm (`apps/*`).
+### `apps/api/.env`
 
-```bash
-pnpm install
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-pnpm dev
-```
-
-Rellenar `apps/api/.env` con las credenciales reales de Postgres y Spaces antes
-de arrancar. `pnpm dev` levanta el API en `:3001` y el front en `:5173`.
-
-Abrir **http://localhost:5173/vorael/** — con la sub-ruta, que es la `base` de
-Vite.
-
-| Comando | Qué hace |
-|---|---|
-| `pnpm dev` | ambas apps en paralelo |
-| `pnpm dev:api` / `pnpm dev:web` | una sola |
-| `pnpm build` | compila las dos |
-| `pnpm release` | empaqueta `release/*.tar.gz` para subir al servidor |
-
-En dev, `VITE_API_URL` se deja **vacío**: axios pide rutas relativas (`/api/...`)
-y el proxy de Vite las manda a `localhost:3001`. Al ser mismo origen no hay
-CORS, y da igual en qué puerto acabe el dev server.
-
-### Ensayar producción en local
-
-`vite preview` sirve el build real, con `VITE_API_URL=/vorael` ya compilado
-dentro del bundle. Para que esa versión funcione sin Nginx,
-[vite.config.ts](apps/web/vite.config.ts) define un `preview.proxy` que replica
-la regla de Nginx: recorta el prefijo y reenvía a Express. Sirve para detectar
-antes de desplegar los fallos que solo aparecen bajo la sub-ruta.
-
-```bash
-pnpm build:web
-pnpm --filter web preview   # http://localhost:4173/vorael/
-```
-
-`server.proxy` es exclusivo del dev server, así que sin ese bloque las llamadas
-a `/vorael/api/...` caerían en el fallback del SPA y devolverían `index.html`
-con un 200 — JSON esperado, HTML recibido, y un archivo corrupto si es una
-descarga. Con `VITE_API_URL` vacío la clave del proxy queda en `/api` y el
-`rewrite` no hace nada.
-
----
-
-## 6. Variables de entorno
-
-Nunca hay un `.env` real en este repositorio. Los `.env.example` son la
-plantilla; los valores reales se rellenan a mano en cada máquina y en el
-servidor.
-
-### `apps/api/.env` — [plantilla](apps/api/.env.example) · [producción](apps/api/.env.production.example)
-
-| Variable | Def. | Para qué |
+| Variable | Defecto | Para qué |
 |---|---|---|
-| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` | — / `5432` | conexión a Postgres |
-| `DB_SSL` | `false` | `true` fuerza TLS con `rejectUnauthorized: false` |
-| `S3_ENDPOINT` | — | host de **región** de Spaces, sin el bucket delante |
-| `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY` | — | bucket y credenciales |
-| `S3_REGION` | `us-east-1` | en producción, `sfo3` |
-| `PORT` | `3001` | puerto de Express |
-| `HOST` | `127.0.0.1` | **dejar en loopback** detrás de Nginx |
-| `CORS_ORIGIN` | `*` | lista separada por comas; en producción el dominio |
+| `DB_HOST` `DB_PORT` `DB_NAME` `DB_USER` `DB_PASSWORD` | — / `5432` | Conexión a PostgreSQL |
+| `DB_SSL` | `false` | `true` fuerza TLS |
+| `S3_ENDPOINT` | — | Host de Spaces (sin bucket) |
+| `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY` | — | Bucket y credenciales |
+| `S3_REGION` | `us-east-1` | En producción: `sfo3` |
+| `PORT` | `3001` | Puerto de Express |
+| `HOST` | `127.0.0.1` | Loopback detrás de Nginx |
+| `CORS_ORIGIN` | `*` | Orígenes permitidos |
+| `DB_MOCK` | `false` | Modo mock (sin DB/S3) |
+| `SEARCH_ENGINE` | `graph` | Motor de búsqueda |
+| `GRAPH_REFRESH_MS` | `60000` | Intervalo de refresh |
+| `METADATA_EMBED` | `none` | `exiftool` para incrustar metadatos |
+| `ALLOW_BACKFILL_WRITE` | `false` | Permitir escritura en S3 |
 
-### `apps/web/.env` — [plantilla](apps/web/.env.example)
+### `apps/web/.env`
 
 | Variable | Dev | Producción |
 |---|---|---|
-| `VITE_API_URL` | vacío (usa el proxy de Vite) | `/vorael` |
+| `VITE_API_URL` | vacío (proxy de Vite) | `/vorael` |
 | `VITE_BASE_PATH` | `/vorael/` | `/vorael/` |
 | `VITE_DEV_API_PROXY` | `http://localhost:3001` | — |
 
-`apps/web/.env.production` **sí está en el repositorio**: no tiene secretos,
-solo la ruta relativa que necesita el build de producción.
-
 ---
 
-## 7. Estructura del repositorio
+## 9. Estructura del repositorio
 
 ```
 vorael/
-├── ARQUITECTURA.md          este documento
-├── DEPLOY.md                despliegue paso a paso
-├── package.json             scripts del monorepo
-├── pnpm-workspace.yaml      workspaces: apps/*
+├── ARQUITECTURA.md              este documento
+├── DEPLOY.md                    despliegue paso a paso
+├── README.md                    arranque rápido
+├── docs/
+│   └── PLAN_GRAFOS.md           decisiones de diseño del motor de grafos
+├── package.json                 scripts del monorepo
+├── pnpm-workspace.yaml          workspaces: apps/*
 ├── apps/
-│   ├── api/                 Express + Postgres + S3
+│   ├── api/                     Express + Postgres + S3 + Graphology
+│   │   ├── .ExifTool_config     namespace XMP-vorael
+│   │   ├── test/                suites de test (Vitest, 98 tests)
+│   │   ├── bench/               benchmark SQL vs grafo
+│   │   ├── test-images/         placeholders mock (Sharp)
 │   │   └── src/
-│   │       ├── index.ts     app, middleware, montaje de rutas
-│   │       ├── config.ts    lectura de .env
-│   │       ├── db.ts        pool de pg
-│   │       ├── s3.ts        cliente de Spaces + presign
-│   │       ├── types.ts     forma de la fila
-│   │       └── routes/      images · search · tags · filters · stats
-│   └── web/                 SPA React
+│   │       ├── index.ts         app, middleware, montaje de rutas
+│   │       ├── config.ts        lectura de .env
+│   │       ├── db.ts            pool de pg + modo mock
+│   │       ├── s3.ts            cliente de Spaces + presign
+│   │       ├── graph.ts         motor de grafos (Graphology + export)
+│   │       ├── metadata.ts      incrustación/lectura EXIF/IPTC/XMP
+│   │       ├── mockData.ts      datos mock (30 imágenes)
+│   │       ├── types.ts         forma de la fila
+│   │       ├── routes/          images · search · tags · filters · stats · graph
+│   │       └── scripts/
+│   │           ├── export-portable.ts   export local con metadatos
+│   │           ├── backfill.ts          re-escritura en S3
+│   │           └── scanner.ts           reconstrucción desde archivos
+│   └── web/                     SPA React
 │       └── src/
-│           ├── main.tsx     providers y BrowserRouter
-│           ├── App.tsx      rutas
-│           ├── pages/       una por ruta
-│           ├── components/  layout · features · ui
-│           ├── hooks/       datos, scroll infinito, debounce
-│           ├── services/    cliente axios
-│           └── types/       tipos compartidos con el API
+│           ├── main.tsx         providers y BrowserRouter
+│           ├── App.tsx          rutas
+│           ├── pages/           una por ruta (Gallery, Search, Graph, ...)
+│           ├── components/      layout · features · ui
+│           ├── hooks/           datos, scroll infinito, debounce
+│           ├── services/        cliente axios + tipos API
+│           └── types/           tipos compartidos con el API
 └── deploy/
-    ├── nginx-vorael.conf    bloques location para pegar en el server
-    ├── vorael-api.service   unidad systemd
-    └── build-release.sh     empaquetado de release
+    ├── nginx-vorael.conf        bloques location para Nginx
+    ├── vorael-api.service       unidad systemd
+    └── build-release.sh         empaquetado de release
 ```
 
 ---
 
-## 8. Cosas a tener en cuenta
+## 10. Notas de implementación
 
-- **Toda petición al API debe pasar por la instancia de axios** de
-  `services/api.ts`, nunca por `fetch` en crudo. Un `fetch('/api/...')` pide la
-  raíz del dominio y se salta el `baseURL`, así que en producción no llega a
-  Express: Nginx solo proxea `/vorael/api/`. En desarrollo el proxy de Vite
-  responde en `/api` a secas, con lo cual el error no se nota hasta desplegar.
-  Los dos botones de descarga tuvieron exactamente ese fallo; hoy ambos llaman a
-  `downloadImage()`.
-- **La descarga sobrescribe el timeout a 120 s.** La instancia usa 20 s, que
-  sobra para JSON, pero el endpoint baja el original de Spaces y lo recodifica
-  con `sharp`. Nginx le concede 120 s a propósito (§2.2), y `downloadImage()`
-  iguala ese margen para no cortar las imágenes grandes.
-- **`lib/utils.ts` tiene un `useDebounce` que no hace nada** (devuelve el valor
-  tal cual). El real está en `hooks/useDebounce.ts`. No importar el de `lib`.
-- **`sharp` trae binarios nativos por plataforma.** No se puede copiar el
-  `node_modules` de Windows al servidor Linux; hay que instalar allí.
-- **Cambiar la sub-ruta** implica los cuatro sitios de §4.3, no solo el `.env`.
+- **`trust proxy`** — activado, para que `req.ip` y `req.protocol` reflejen las
+  cabeceras `X-Forwarded-*` de Nginx.
+- **Config tolerante** — `config.ts` avisa pero no aborta si falta una variable.
+  El proceso arranca y `/api/health` responde aunque Postgres esté mal.
+- **`limit`/`offset` interpolados** — van directo al SQL, no como parámetros.
+  Son seguros porque pasan por `Number()` + `Math.min/max`. Los valores de
+  usuario sí van parametrizados.
+- **Auto-start** — `index.ts` solo hace `app.listen` cuando se ejecuta directo
+  (`require.main === module`).
+- **sharp trae binarios nativos** por plataforma. No se puede copiar
+  `node_modules` de Windows al servidor Linux.
 - **El puerto 3001 no debe abrirse en el firewall.** `HOST=127.0.0.1` y todo
   entra por Nginx.
+- **La sub-ruta `/vorael/`** toca 4 sitios: vite.config.ts (base), main.tsx
+  (basename), nginx-vorael.conf (location), index.html (favicon href).

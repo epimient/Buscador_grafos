@@ -1,9 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { readFile } from 'fs/promises';
+import path from 'path';
 import sharp from 'sharp';
-import { pool } from '../db';
+import { query } from '../db';
 import { s3 } from '../s3';
 import { config } from '../config';
+import { graphStore, related as graphRelated } from '../graph';
+import { embedMetadata } from '../metadata';
 
 export const imagesRouter = Router();
 
@@ -51,8 +55,8 @@ imagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
     `;
 
     const [countRes, dataRes] = await Promise.all([
-      pool.query(countSql, params),
-      pool.query(dataSql, params),
+      query(countSql, params),
+      query(dataSql, params),
     ]);
 
     const total = countRes.rows[0].total as number;
@@ -72,7 +76,7 @@ imagesRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
 imagesRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params.id;
-    const { rows } = await pool.query(
+    const { rows } = await query(
       `SELECT ${SELECT_COLS} FROM generated_images WHERE id = $1`,
       [id],
     );
@@ -96,28 +100,46 @@ imagesRouter.get('/:id/download', async (req: Request, res: Response, next: Next
     const raw = typeof req.query.format === 'string' ? req.query.format.toLowerCase() : '';
     const format: DownloadFormat = VALID_FORMATS.has(raw) ? (raw as DownloadFormat) : 'webp';
 
-    const { rows } = await pool.query(
-      'SELECT s3_key, filename FROM generated_images WHERE id = $1',
+    const { rows } = await query(
+      'SELECT s3_key, filename, original_prompt, enhanced_prompt, tags, subject, style, mood, use_case, color_palette, created_at FROM generated_images WHERE id = $1',
       [id],
     );
     if (rows.length === 0) {
       res.status(404).json({ error: 'Image not found' });
       return;
     }
-    const { s3_key, filename } = rows[0] as { s3_key: string; filename: string | null };
-    if (!s3_key) {
+    const row = rows[0] as {
+      s3_key: string;
+      filename: string | null;
+      original_prompt: string | null;
+      enhanced_prompt: string | null;
+      tags: string[] | null;
+      subject: string | null;
+      style: string | null;
+      mood: string | null;
+      use_case: string | null;
+      color_palette: string[] | null;
+      created_at: string | null;
+    };
+    if (!row.s3_key) {
       res.status(500).json({ error: 'Image has no S3 key' });
       return;
     }
 
-    const obj = await s3.send(new GetObjectCommand({ Bucket: config.s3.bucket, Key: s3_key }));
-    if (!obj.Body) throw new Error('Empty S3 response body');
+    let original: Buffer;
 
-    const chunks: Buffer[] = [];
-    for await (const chunk of obj.Body as AsyncIterable<Uint8Array>) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    if (config.mock) {
+      const filePath = path.join(__dirname, '../../test-images', path.basename(row.s3_key));
+      original = await readFile(filePath);
+    } else {
+      const obj = await s3.send(new GetObjectCommand({ Bucket: config.s3.bucket, Key: row.s3_key }));
+      if (!obj.Body) throw new Error('Empty S3 response body');
+      const chunks: Buffer[] = [];
+      for await (const chunk of obj.Body as AsyncIterable<Uint8Array>) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      original = Buffer.concat(chunks);
     }
-    const original = Buffer.concat(chunks);
 
     let converted: Buffer;
     let mimeType: string;
@@ -137,7 +159,26 @@ imagesRouter.get('/:id/download', async (req: Request, res: Response, next: Next
       ext = 'webp';
     }
 
-    const baseName = (filename ?? `image-${id}`).replace(/\.\w+$/, '');
+    // Incrustar metadatos EXIF/IPTC si METADATA_EMBED=exiftool.
+    if (config.metadata.embed === 'exiftool') {
+      const { buffer: enriched } = await embedMetadata({
+        buffer: converted,
+        ext,
+        description: row.enhanced_prompt ?? row.original_prompt,
+        subject: row.subject,
+        tags: row.tags,
+        id,
+        style: row.style,
+        mood: row.mood,
+        useCase: row.use_case,
+        colorPalette: row.color_palette,
+        fileName: row.filename,
+        createdAt: row.created_at,
+      });
+      converted = enriched;
+    }
+
+    const baseName = (row.filename ?? `image-${id}`).replace(/\.\w+$/, '');
     const downloadName = `${baseName}.${ext}`.replace(/"/g, '');
 
     res.setHeader('Content-Type', mimeType);
@@ -148,13 +189,21 @@ imagesRouter.get('/:id/download', async (req: Request, res: Response, next: Next
   }
 });
 
-// GET /api/images/:id/related — by overlapping tags or same style
+// GET /api/images/:id/related — by graph similarity (Jaccard + co-occurrence)
 imagesRouter.get('/:id/related', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const id = req.params.id;
     const limit = Math.min(24, Math.max(1, Number(req.query.limit ?? 8)));
 
-    const baseRes = await pool.query(
+    if (config.graph.engine === 'graph' && graphStore.ready) {
+      const snap = graphStore.snapshot!;
+      const result = graphRelated(snap, id, limit);
+      res.json({ items: result.items });
+      return;
+    }
+
+    // Fallback SQL
+    const baseRes = await query(
       'SELECT tags, style FROM generated_images WHERE id = $1',
       [id],
     );
@@ -164,8 +213,7 @@ imagesRouter.get('/:id/related', async (req: Request, res: Response, next: NextF
     }
     const { tags, style } = baseRes.rows[0] as { tags: string[] | null; style: string | null };
 
-    // Score: number of overlapping tags + 1 if same style. Exclude the source image.
-    const { rows } = await pool.query(
+    const { rows } = await query(
       `
       SELECT ${SELECT_COLS},
              (

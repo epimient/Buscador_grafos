@@ -11,6 +11,9 @@
     "build": "pnpm -r build",
     "build:api": "pnpm --filter api build",
     "build:web": "pnpm --filter web build",
+    "test": "pnpm --filter api test",
+    "test:watch": "pnpm --filter api test:watch",
+    "test:coverage": "pnpm --filter api test:coverage",
     "release": "bash deploy/build-release.sh",
     "lint": "pnpm -r lint"
   },

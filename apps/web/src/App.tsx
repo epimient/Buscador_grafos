@@ -6,6 +6,7 @@ import { ImageDetailPage } from '@/pages/ImageDetail';
 import { TagPage } from '@/pages/TagPage';
 import { TagsPage } from '@/pages/Tags';
 import { StatsPage } from '@/pages/Stats';
+import { GraphPage } from '@/pages/Graph';
 import { NotFoundPage } from '@/pages/NotFound';
 
 export function App() {
@@ -18,6 +19,7 @@ export function App() {
         <Route path="tag/:tag" element={<TagPage />} />
         <Route path="tags" element={<TagsPage />} />
         <Route path="stats" element={<StatsPage />} />
+        <Route path="graph" element={<GraphPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
