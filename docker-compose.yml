@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: vorael-db
+    environment:
+      POSTGRES_DB: generated_images
+      POSTGRES_USER: vorael
+      POSTGRES_PASSWORD: vorael123
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+volumes:
+  pgdata:

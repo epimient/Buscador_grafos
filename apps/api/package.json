@@ -14,7 +14,8 @@
     "test:coverage": "vitest run --coverage",
     "export-portable": "ts-node --transpile-only src/scripts/export-portable.ts",
     "backfill": "ts-node --transpile-only src/scripts/backfill.ts",
-    "scan": "ts-node --transpile-only src/scripts/scanner.ts"
+    "scan": "ts-node --transpile-only src/scripts/scanner.ts",
+    "seed:db": "ts-node --transpile-only src/scripts/seed-db.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.654.0",

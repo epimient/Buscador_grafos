@@ -48,6 +48,8 @@ export interface GraphSnapshot {
   coWeights: Map<string, Map<string, number>>;
   /** Lista global ordenada `created_at DESC, id DESC`. */
   orderedIds: string[];
+  /** Nodos ordenados por grado (descendente) — usado por export sin center. */
+  topByDegree: string[];
   /** Estadísticas rápidas. */
   stats: {
     total: number;
@@ -58,6 +60,8 @@ export interface GraphSnapshot {
   };
   /** Timestamp de construcción. */
   builtAt: Date;
+  /** Tiempo de construcción en ms. */
+  buildMs: number;
 }
 
 // ── Utilidades de tokenización ──────────────────────────────────────────────
@@ -128,6 +132,7 @@ const COLOR = 'color:';
  * Función pura — sin I/O. Se puede testear sin Postgres.
  */
 export function buildGraph(rows: ImageRow[]): GraphSnapshot {
+  const t0 = Date.now();
   const graph = new Graph({ type: 'undirected' });
   const byId = new Map<string, ImageRow>();
   const tagIndex = new Map<string, Set<string>>();
@@ -258,10 +263,18 @@ export function buildGraph(rows: ImageRow[]): GraphSnapshot {
   const orderedIds = rows
     .slice()
     .sort((a, b) => {
-      const cmp = b.created_at.localeCompare(a.created_at);
+      const aTime = String(a.created_at);
+      const bTime = String(b.created_at);
+      const cmp = bTime.localeCompare(aTime);
       return cmp !== 0 ? cmp : b.id.localeCompare(a.id);
     })
     .map((r) => r.id);
+
+  // Nodos ordenados por grado (para export sin center, evita O(n log n) por request).
+  const topByDegree = graph.nodes()
+    .map((n) => ({ id: n, degree: graph.degree(n) }))
+    .sort((a, b) => b.degree - a.degree)
+    .map((n) => n.id);
 
   // Stats.
   const tagStats = [...tagCounts.entries()]
@@ -291,6 +304,7 @@ export function buildGraph(rows: ImageRow[]): GraphSnapshot {
     textIndex,
     coWeights: coOccurrence,
     orderedIds,
+    topByDegree,
     stats: {
       total: rows.length,
       styles: styleStats,
@@ -299,6 +313,7 @@ export function buildGraph(rows: ImageRow[]): GraphSnapshot {
       useCases: useCaseStats,
     },
     builtAt: new Date(),
+    buildMs: Date.now() - t0,
   };
 }
 
@@ -381,7 +396,7 @@ export function search(
     if (cmp !== 0) return cmp;
     const rowA = snap.byId.get(a.id)!;
     const rowB = snap.byId.get(b.id)!;
-    const cmpDate = rowB.created_at.localeCompare(rowA.created_at);
+    const cmpDate = String(rowB.created_at).localeCompare(String(rowA.created_at));
     if (cmpDate !== 0) return cmpDate;
     return b.id.localeCompare(a.id);
   });
@@ -466,7 +481,7 @@ export function related(
       if (cmp !== 0) return cmp;
       const rowA = snap.byId.get(a[0])!;
       const rowB = snap.byId.get(b[0])!;
-      return rowB.created_at.localeCompare(rowA.created_at);
+      return String(rowB.created_at).localeCompare(String(rowA.created_at));
     })
     .slice(0, limit)
     .map(([cid]) => snap.byId.get(cid)!);
@@ -505,7 +520,7 @@ export function tagImages(
     .map((cid) => snap.byId.get(cid)!)
     .filter(Boolean)
     .sort((a, b) => {
-      const cmp = b.created_at.localeCompare(a.created_at);
+      const cmp = String(b.created_at).localeCompare(String(a.created_at));
       if (cmp !== 0) return cmp;
       return b.id.localeCompare(a.id);
     });
@@ -623,12 +638,8 @@ function exportSnapshot(
       frontier = next;
     }
   } else {
-    // Sin center: tomar nodos ordenados por grado, limitados.
-    const allNodes = snap.graph.nodes()
-      .map((n) => ({ id: n, degree: snap.graph.degree(n) }))
-      .sort((a, b) => b.degree - a.degree)
-      .slice(0, limit);
-    nodeIds = new Set(allNodes.map((n) => n.id));
+    // Sin center: usar precomputed topByDegree (O(1) vs O(n log n)).
+    nodeIds = new Set(snap.topByDegree.slice(0, limit));
   }
 
   // Construir nodos.

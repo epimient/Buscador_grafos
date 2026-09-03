@@ -17,15 +17,14 @@
 
 ## Arquitectura del Grafo
 
-```
-n8n (externo) ──► Postgres + S3        ← genera y guarda
-                      ▼
-API VORAEL (este repo) ──► graph.ts    ← carga desde Postgres cada N segundos
-                      │    ├── nodos: Image, Tag, Style, Mood, UseCase, Color
-                      │    ├── aristas: Image↔Tag/Style/Mood/UseCase/Color
-                      │    └── co-ocurrencia: Tag↔Tag {weight}
-                      ▼
-Front React (este repo) ← pide /vorael/api/* (URLs y JSON iguales)
+```mermaid
+flowchart TD
+    A["n8n externo"] -->|"genera y guarda"| B["Postgres + S3"]
+    B -->|"carga desde Postgres cada N segundos"| C["API VORAEL graph.ts"]
+    C --> C1["nodos: Image, Tag, Style, Mood, UseCase, Color"]
+    C --> C2["aristas: Image-Tag/Style/Mood/UseCase/Color"]
+    C --> C3["co-ocurrencia: Tag-Tag weight"]
+    D["Front React"] -->|"pide /vorael/api/* URLs y JSON iguales"| C
 ```
 
 ### Nodos
@@ -89,5 +88,5 @@ Front React (este repo) ← pide /vorael/api/* (URLs y JSON iguales)
 
 ### Fase 4 — Benchmark + Cierre
 - [x] Script `apps/api/bench/compare.ts`
-- [x] typecheck + build + test final (87/87 pasando)
+- [x] typecheck + build + test final (98/98 pasando)
 - [x] Actualizar checklist en `docs/PLAN_GRAFOS.md`

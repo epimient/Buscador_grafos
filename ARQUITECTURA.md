@@ -32,7 +32,7 @@ Producción: **https://n8n.americana.edu.co/vorael/**
 | Componente | Tecnología | Versión | Propósito |
 |---|---|---|---|
 | Framework | React | 18.x | UI declarativa |
-| Bundler | Vite | 6.x | Dev server, HMR, build optimizado |
+| Bundler | Vite | 5.x | Dev server, HMR, build optimizado |
 | Lenguaje | TypeScript | 5.x | Type safety |
 | Estilos | Tailwind CSS | 3.x | Utility-first CSS |
 | Data fetching | TanStack Query | 5.x | Cache, revalidación, infinite scroll |
@@ -59,102 +59,75 @@ Producción: **https://n8n.americana.edu.co/vorael/**
 
 ### 2.1 Diagrama de componentes
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         PRODUCCIÓN                                  │
-│                                                                     │
-│   Navegador ──────── Nginx (n8n.americana.edu.co, HTTPS 443)       │
-│        │                    │                    │                   │
-│        │              /vorael/*            /vorael/api/*             │
-│        │              (estáticos)          (proxy_pass)              │
-│        │                    │                    │                   │
-│        │                    ▼                    ▼                   │
-│        │          React SPA (Vite)      Express API (:3001)         │
-│        │          Tailwind + Sigma        pg pool + Sharp           │
-│        │                                      │                     │
-│        │                               ┌──────┴──────┐              │
-│        │                               ▼              ▼              │
-│        │                          PostgreSQL     DigitalOcean       │
-│        │                      generated_images   Spaces (S3)        │
-│        │                                          bucket n8ns3      │
-│        │                                                           │
-│        └───────────── las imágenes se cargan directo desde Spaces ─┘
+```mermaid
+flowchart TD
+    Browser[Navegador] --> Nginx[Nginx\nn8n.americana.edu.co\nHTTPS 443]
+    Nginx --> |"/vorael/*\nstatic files"| SPA[React SPA - Vite\nTailwind + Sigma]
+    Nginx --> |"/vorael/api/*\nproxy_pass"| API[Express API :3001\npg pool + Sharp]
+    API --> PostgreSQL[(PostgreSQL\ngenerated_images)]
+    API --> S3[DigitalOcean Spaces - S3\nbucket n8ns3]
+    Browser -.-> |images loaded directly from Spaces| S3
 ```
 
 ### 2.2 Flujo de datos
 
-```
-1. EXTERNO (fuera de este repo)
-   ┌──────────────────────────────────────────────────┐
-   │  Flujo n8n genera imágenes                       │
-   │  → Sube archivos a DigitalOcean Spaces (S3)      │
-   │  → Escribe fila en generated_images (PostgreSQL)  │
-   └──────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph EXTERNO["EXTERNO - fuera de este repo"]
+        N8N[Flujo n8n genera imagenes]
+        N8N --> |Sube archivos| S3ext[DigitalOcean Spaces - S3]
+        N8N --> |Escribe fila| DBext[(PostgreSQL\ngenerated_images)]
+    end
 
-2. BACKEND (apps/api)
-   ┌──────────────────────────────────────────────────┐
-   │  Al arrancar:                                     │
-   │  → Conecta a PostgreSQL (pool pg, máx. 10)       │
-   │  → Carga grafo in-memory (Graphology)             │
-   │  → Inicia timer de refresh cada 60s               │
-   │  → Escucha en 127.0.0.1:3001                     │
-   │                                                   │
-   │  En cada request:                                 │
-   │  → /api/images: SQL directo (paginación)          │
-   │  → /api/search, /tags, /related, /filters, /stats │
-   │    → Lee del grafo en memoria                     │
-   │    → Fallback a SQL si grafo no está listo        │
-   │  → /api/images/:id/download                       │
-   │    → Baja imagen de S3                            │
-   │    → Convierte con Sharp (WebP/PNG/JPG)           │
-   │    → Incrusta metadatos EXIF/IPTC/XMP (exiftool)  │
-   │    → Devuelve binario con Content-Disposition      │
-   │  → /api/graph                                     │
-   │    → Serializa nodos y aristas del grafo          │
-   │    → Filtra por tipos, soporta ego-graph          │
-   └──────────────────────────────────────────────────┘
+    subgraph BACKEND["BACKEND - apps/api"]
+        ARR[Al arrancar]
+        ARR --> PG[Conecta PostgreSQL\npool pg, max 10]
+        ARR --> GRAF[Carga grafo in-memory\nGraphology]
+        ARR --> TIMER[Inicia timer refresh cada 60s]
+        ARR --> LISTEN[Escucha en 127.0.0.1:3001]
 
-3. FRONTEND (apps/web)
-   ┌──────────────────────────────────────────────────┐
-   │  React SPA con Vite                               │
-   │  → Gallery: grid con scroll infinito + filtros    │
-   │  → Search: resultados puntuados por relevancia    │
-   │  → ImageDetail: prompts, paleta, descarga         │
-   │  → Graph: red interactiva con sigma.js (WebGL)    │
-   │  → Tags, Stats, Related                           │
-   │  → Todo vía axios → proxy Vite → API Express      │
-   └──────────────────────────────────────────────────┘
+        REQ[En cada request]
+        REQ --> |"/api/images"| SQL[SQL directo - paginacion]
+        REQ --> |"/api/search, /tags, /related,\n/filters, /stats"| LEEGRAF[Lee del grafo en memoria]
+        LEEGRAF --> |Fallback si grafo no listo| SQL
+        REQ --> |"/api/images/:id/download"| DOWN[Baja imagen de S3]
+        DOWN --> SHARP[Convierte con Sharp\nWebP / PNG / JPG]
+        SHARP --> EXIF[Incrusta metadatos\nEXIF / IPTC / XMP - exiftool]
+        EXIF --> BIN[Devuelve binario\nContent-Disposition]
+        REQ --> |"/api/graph"| SERIAL[Serializa nodos y aristas del grafo]
+        SERIAL --> FILTER[Filtra por tipos,\nsoporta ego-graph]
+    end
+
+    subgraph FRONTEND["FRONTEND - apps/web"]
+        SPA[React SPA con Vite]
+        SPA --> GALL[Gallery: grid con scroll infinito + filtros]
+        SPA --> SEARCH[Search: resultados puntuados por relevancia]
+        SPA --> DETAIL[ImageDetail: prompts, paleta, descarga]
+        SPA --> GRAPH[Graph: red interactiva con sigma.js WebGL]
+        SPA --> TAGS[Tags, Stats, Related]
+        SPA --> AXIOS[Todo via axios -> proxy Vite -> API Express]
+    end
+
+    EXTERNO --> BACKEND
+    BACKEND --> FRONTEND
 ```
 
 ### 2.3 Flujo de una descarga con metadatos
 
-```
-Navegador                         API                           ExifTool
-    │                               │                              │
-    │  GET /api/images/:id/download │                              │
-    │  ?format=webp                 │                              │
-    │ ──────────────────────────────>│                              │
-    │                               │  1. Busca imagen en DB       │
-    │                               │  2. Baja archivo de S3       │
-    │                               │  3. Convierte con Sharp      │
-    │                               │     → buffer en memoria      │
-    │                               │                              │
-    │                               │  4. Exec exiftool -overwrite │
-    │                               │     original -all=...        │
-    │                               │ ────────────────────────────>│
-    │                               │                              │
-    │                               │  5. Exiftool escribe:        │
-    │                               │     - EXIF:ImageDescription  │
-    │                               │     - EXIF:Artist            │
-    │                               │     - IPTC:Keywords          │
-    │                               │     - XMP:Subject            │
-    │                               │     - XMP-vorael:* (custom)  │
-    │                               │                              │
-    │                               │<─── archivo modificado ──────│
-    │                               │                              │
-    │  <── binario (image/webp) ────│                              │
-    │  Content-Disposition: att.    │                              │
-    │                               │                              │
+```mermaid
+sequenceDiagram
+    participant B as Navegador
+    participant A as API
+    participant E as ExifTool
+
+    B->>A: GET /api/images/:id/download?format=webp
+    A->>A: 1. Busca imagen en DB
+    A->>A: 2. Baja archivo de S3
+    A->>A: 3. Convierte con Sharp -> buffer en memoria
+    A->>E: 4. Exec exiftool -overwrite_original -all=...
+    E->>E: 5. Escribe EXIF:ImageDescription, EXIF:Artist,\nIPTC:Keywords, XMP:Subject, XMP-vorael:*
+    E-->>A: archivo modificado
+    A-->>B: binario (image/webp)\nContent-Disposition: att.
 ```
 
 ---
@@ -234,7 +207,7 @@ El sistema puede leer metadatos de imágenes existentes:
   Ningún endpoint falla. El sistema detecta exiftool al arrancar y cachea el
   resultado.
 - Si **exiftool falla** durante la incrustación: se entrega la imagen original
-  sin metadatos附加. Se loguea el error.
+   sin metadatos. Se loguea el error.
 - Si **no hay metadatos vorael** en una imagen: `readImageMetadata` retorna
   `hasVoraelMeta: false` y campos estándar vacíos.
 - Si **el modo es mock**: se usan archivos locales de `test-images/` (placeholders
@@ -509,6 +482,11 @@ Tema oscuro fijo (`color-scheme: dark`):
 | `METADATA_EMBED` | `none` | `exiftool` para incrustar metadatos |
 | `ALLOW_BACKFILL_WRITE` | `false` | Permitir escritura en S3 |
 
+> **Nota local:** el `.env` real está gitignored. Para desarrollo local se usa
+> Docker (`docker-compose.yml`, Postgres en puerto **5433**) y se copia
+> `.env.example` a `.env` completando las credenciales. Las imágenes mock se
+> cargan con `pnpm seed:db`.
+
 ### `apps/web/.env`
 
 | Variable | Dev | Producción |
@@ -521,48 +499,60 @@ Tema oscuro fijo (`color-scheme: dark`):
 
 ## 9. Estructura del repositorio
 
-```
-vorael/
-├── ARQUITECTURA.md              este documento
-├── DEPLOY.md                    despliegue paso a paso
-├── README.md                    arranque rápido
-├── docs/
-│   └── PLAN_GRAFOS.md           decisiones de diseño del motor de grafos
-├── package.json                 scripts del monorepo
-├── pnpm-workspace.yaml          workspaces: apps/*
-├── apps/
-│   ├── api/                     Express + Postgres + S3 + Graphology
-│   │   ├── .ExifTool_config     namespace XMP-vorael
-│   │   ├── test/                suites de test (Vitest, 98 tests)
-│   │   ├── bench/               benchmark SQL vs grafo
-│   │   ├── test-images/         placeholders mock (Sharp)
-│   │   └── src/
-│   │       ├── index.ts         app, middleware, montaje de rutas
-│   │       ├── config.ts        lectura de .env
-│   │       ├── db.ts            pool de pg + modo mock
-│   │       ├── s3.ts            cliente de Spaces + presign
-│   │       ├── graph.ts         motor de grafos (Graphology + export)
-│   │       ├── metadata.ts      incrustación/lectura EXIF/IPTC/XMP
-│   │       ├── mockData.ts      datos mock (30 imágenes)
-│   │       ├── types.ts         forma de la fila
-│   │       ├── routes/          images · search · tags · filters · stats · graph
-│   │       └── scripts/
-│   │           ├── export-portable.ts   export local con metadatos
-│   │           ├── backfill.ts          re-escritura en S3
-│   │           └── scanner.ts           reconstrucción desde archivos
-│   └── web/                     SPA React
-│       └── src/
-│           ├── main.tsx         providers y BrowserRouter
-│           ├── App.tsx          rutas
-│           ├── pages/           una por ruta (Gallery, Search, Graph, ...)
-│           ├── components/      layout · features · ui
-│           ├── hooks/           datos, scroll infinito, debounce
-│           ├── services/        cliente axios + tipos API
-│           └── types/           tipos compartidos con el API
-└── deploy/
-    ├── nginx-vorael.conf        bloques location para Nginx
-    ├── vorael-api.service       unidad systemd
-    └── build-release.sh         empaquetado de release
+```mermaid
+flowchart TD
+    ROOT[vorael/] --> ARQ[ARQUITECTURA.md\ndocumento]
+    ROOT --> DEPLOY[DEPLOY.md\ndespliegue paso a paso]
+    ROOT --> README[README.md\narranque rapido]
+    ROOT --> DC[docker-compose.yml\nPostgres local puerto 5433]
+    ROOT --> PKG[package.json\nscripts del monorepo]
+    ROOT --> WS[pnpm-workspace.yaml\nworkspaces: apps/*]
+
+    ROOT --> DOCS[docs/]
+    DOCS --> PLAN[PLAN_GRAFOS.md\ndecisiones de diseno del motor de grafos]
+    DOCS --> GUIA[VORAEL_GUIA_COMPLETA.md\nguia completa dummies-friendly]
+
+    ROOT --> APPS[apps/]
+
+    APPS --> API[api/\nExpress + Postgres + S3 + Graphology]
+    API --> EXIFCFG[.ExifTool_config\nnamespace XMP-vorael]
+    API --> ENV[.env.example\nplantilla local gitignored real .env]
+    API --> ENVP[.env.production.example\nplantilla para servidor]
+    API --> TEST[test/\nsuites de test Vitest 98 tests]
+    API --> BENCH[bench/\nbenchmark SQL vs grafo]
+    API --> TESTIMG[test-images/\nplaceholders mock Sharp 10 archivos]
+    API --> TESTREAL[test-images-real/\nimagenes descargadas de S3 simulacion local ~45MB untracked]
+    API --> SRC[src/]
+    SRC --> INDEX[index.ts\napp middleware montaje de rutas]
+    SRC --> CONFIG[config.ts\nlectura de .env]
+    SRC --> DB[db.ts\npool de pg + modo mock]
+    SRC --> S3FILE[s3.ts\ncliente de Spaces + presign]
+    SRC --> GRAPH[graph.ts\nmotor de grafos Graphology + export]
+    SRC --> METADATA[metadata.ts\nincrustacion / lectura EXIF IPTC XMP]
+    SRC --> MOCK[mockData.ts\ndatos mock 30 imagenes]
+    SRC --> TYPES[types.ts\nforma de la fila]
+    SRC --> ROUTES[routes/\nimages search tags filters stats graph]
+    SRC --> SCRIPTS[scripts/]
+    SCRIPTS --> EXP[export-portable.ts\nexport local con metadatos]
+    SCRIPTS --> BACK[backfill.ts\nre-escritura en S3]
+    SCRIPTS --> SCAN[scanner.ts\nreconstruccion desde archivos]
+    SCRIPTS --> SEED[seed-db.ts\nseed local con datos mock 30 imgs]
+    SCRIPTS --> SIM[simulate-local.ts\ndescarga de S3 + incrustacion + DB local]
+
+    APPS --> WEB[web/\nSPA React]
+    WEB --> MAIN[main.tsx\nproviders y BrowserRouter]
+    WEB --> APPFILE[App.tsx\nrutas]
+    WEB --> PAGES[pages/\nuna por ruta Gallery Search Graph ...]
+    WEB --> COMPONENTS[components/\nlayout features ui]
+    WEB --> HOOKS[hooks/\ndatos scroll infinito debounce]
+    WEB --> SERVICES[services/\ncliente axios + tipos API]
+    WEB --> WTYPES[types/\ntipos compartidos con el API]
+
+    ROOT --> DEPLOYDIR[deploy/]
+    DEPLOYDIR --> NGINX[nginx-vorael.conf\nbloques location para Nginx]
+    DEPLOYDIR --> SYSTEMD[vorael-api.service\nunidad systemd]
+    DEPLOYDIR --> INITSQL[init.sql\nesquema PostgreSQL montado por Docker]
+    DEPLOYDIR --> BUILD[build-release.sh\nempaquetado de release]
 ```
 
 ---

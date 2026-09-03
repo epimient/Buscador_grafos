@@ -29,34 +29,18 @@ VORAEL es un **catálogo de imágenes generadas por inteligencia artificial** pa
 
 Piensen en el sistema como una casa con varias habitaciones:
 
-### 🏠 La casa completa
+### La casa completa
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    USUARIOS (navegadores)                    │
-│                         │                                    │
-│                    ┌────▼────┐                               │
-│                    │  Nginx  │  ← El portero (recibe todas   │
-│                    │ (HTTPS) │    las peticiones)            │
-│                    └────┬────┘                               │
-│                    ┌────┴────────────────┐                   │
-│                    │                     │                   │
-│              ┌─────▼─────┐        ┌──────▼──────┐           │
-│              │  Galería  │        │   API       │           │
-│              │  (React)  │        │  (Express)  │           │
-│              │  ★ Visual │        │  ★ Lógica   │           │
-│              └───────────┘        └──────┬──────┘           │
-│                                          │                   │
-│                                   ┌──────┴──────┐           │
-│                                   │             │           │
-│                              ┌────▼───┐   ┌─────▼────┐      │
-│                              │PostgreSQL│  │ DigitalOcean│    │
-│                              │(datos)   │  │ Spaces (S3)│    │
-│                              └─────────┘  └──────────┘      │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    U[USUARIOS<br/>navegadores] --> N[Nginx<br/>HTTPS]
+    N --> R[Galeria<br/>React]
+    N --> A[API<br/>Express]
+    A --> PG[(PostgreSQL<br/>datos)]
+    A --> S3[DigitalOcean<br/>Spaces S3]
 ```
 
-### 🧩 Cada pieza explicada
+### Cada pieza explicada
 
 | Pieza | Qué es en palabras simples | Ejemplo cotidiano |
 |---|---|---|
@@ -77,119 +61,87 @@ Piensen en el sistema como una casa con varias habitaciones:
 
 ### Flujo 1: Llega una imagen nueva
 
-```
-1. n8n (externo) genera una imagen con IA
-         │
-         ▼
-2. n8n sube la imagen a DigitalOcean Spaces (S3)
-         │
-         ▼
-3. n8n escribe los datos en PostgreSQL:
-   - id: "img-001"
-   - s3_key: "images/img-001.webp"
-   - tags: ["cat", "sunset", "nature"]
-   - style: "Photorealistic"
-   - mood: "Calm"
-   - subject: "Gato al atardecer"
-   - enhanced_prompt: "Un gato naranja dormido en un tejado al atardecer..."
-         │
-         ▼
-4. VORAEL detecta el cambio (cada 60 segundos)
-         │
-         ▼
-5. Actualiza su grafo en memoria con la nueva imagen
-         │
-         ▼
-6. El usuario ya puede verla, buscarla, y descargarla
+```mermaid
+sequenceDiagram
+    participant n8n
+    participant S3 as DigitalOcean Spaces
+    participant PG as PostgreSQL
+    participant V as VORAEL
+    participant U as Usuario
+
+    n8n->>n8n: Genera imagen con IA
+    n8n->>S3: Sube imagen
+    n8n->>PG: Escribe datos (id, tags, style, mood, subject, prompt)
+    V->>PG: Detecta cambio cada 60s
+    V->>V: Actualiza grafo en memoria
+    U->>V: Ve, busca y descarga imagen
 ```
 
 ### Flujo 2: El usuario busca "gato"
 
-```
-1. Usuario escribe "gato" en el buscador
-         │
-         ▼
-2. Frontend envía: GET /api/search?q=gato
-         │
-         ▼
-3. API busca en el grafo en memoria:
-   - ¿Qué imágenes tienen el tag "cat"?
-   - ¿Qué imágenes tienen "gato" en el subject?
-   - ¿Qué imágenes tienen "gato" en los prompts?
-         │
-         ▼
-4. Calcula un puntaje por relevancia:
-   - Tag "cat" coincide: +3 puntos
-   - Subject contiene "gato": +2 puntos
-   - Prompt contiene "gato": +1 punto
-         │
-         ▼
-5. Devuelve las imágenes ordenadas por puntaje
-         │
-         ▼
-6. Frontend muestra los resultados
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant F as Frontend
+    participant A as API
+    participant G as Grafo en memoria
+
+    U->>F: Escribe "gato"
+    F->>A: GET /api/search?q=gato
+    A->>G: Busca tag "cat", subject "gato", prompts "gato"
+    G-->>A: Coincidencias
+    A->>A: Calcula puntaje (tag +3, subject +2, prompt +1)
+    A-->>F: Imagenes ordenadas por puntaje
+    F-->>U: Muestra resultados
 ```
 
 ### Flujo 3: El usuario descarga una imagen
 
-```
-1. Usuario hace click en "Descargar como WebP"
-         │
-         ▼
-2. Frontend envía: GET /api/images/img-001/download?format=webp
-         │
-         ▼
-3. API hace:
-   a. Busca la imagen en PostgreSQL (obtiene s3_key)
-   b. Baja el archivo de DigitalOcean Spaces
-   c. Convierte con Sharp a WebP lossless
-   d. Incrusta metadatos con ExifTool:
-      - EXIF:Artist = "Corporación Universitaria Americana - VORAEL"
-      - EXIF:ImageDescription = "Un gato naranja dormido..."
-      - IPTC:Keywords = "cat, sunset, nature"
-      - XMP:Subject = "Gato al atardecer"
-      - XMP-vorael:id = "img-001"
-      - XMP-vorael:style = "Photorealistic"
-      - XMP-vorael:mood = "Calm"
-      - XMP-vorael:palette = "#FFD700, #FF6B35"
-         │
-         ▼
-4. Devuelve el archivo modificado al navegador
-         │
-         ▼
-5. Navegador descarga el archivo con metadatos incluidos
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant F as Frontend
+    participant A as API
+    participant PG as PostgreSQL
+    participant S3 as DigitalOcean Spaces
+    participant ST as Sharp
+    participant ET as ExifTool
+
+    U->>F: Click "Descargar como WebP"
+    F->>A: GET /api/images/img-001/download?format=webp
+    A->>PG: Busca imagen (obtiene s3_key)
+    PG-->>A: s3_key
+    A->>S3: Descarga archivo original
+    S3-->>A: Archivo imagen
+    A->>ST: Convierte a WebP lossless
+    ST-->>A: Imagen convertida
+    A->>ET: Incrusta metadatos (EXIF, IPTC, XMP, XMP-vorael)
+    ET-->>A: Imagen con metadatos
+    A-->>F: Archivo modificado
+    F-->>U: Navegador descarga archivo
 ```
 
 ### Flujo 4: El grafo visual (la red de conexiones)
 
-```
-1. Usuario abre /vorael/graph
-         │
-         ▼
-2. Frontend pide: GET /api/graph?limit=200
-         │
-         ▼
-3. API serializa el grafo en memoria:
-   - 76 nodos (imágenes, tags, estilos, moods, colores)
-   - 175 aristas (conexiones entre ellos)
-         │
-         ▼
-4. Frontend recibe { nodes: [...], edges: [...] }
-         │
-         ▼
-5. Graphology crea el grafo en memoria del navegador
-         │
-         ▼
-6. Se aplica un layout force-directed (50 iteraciones):
-   - Los nodos se repelen entre sí (como imanes)
-   - Los nodos conectados se atraen (como resortes)
-   - Todo se centra en medio
-         │
-         ▼
-7. Sigma.js dibuja todo con WebGL (gráfico 3D rápido)
-         │
-         ▼
-8. El usuario ve la red de conexiones
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant F as Frontend
+    participant A as API
+    participant M as Grafo en memoria
+    participant GR as Graphology
+    participant SI as Sigma.js
+
+    U->>F: Abre /vorael/graph
+    F->>A: GET /api/graph?limit=200
+    A->>M: Serializa grafo (143 nodos, 507 aristas)
+    M-->>A: nodes + edges
+    A-->>F: JSON { nodes, edges }
+    F->>GR: Crea grafo en memoria del navegador
+    GR->>GR: Layout force-directed (50 iteraciones)
+    GR->>SI: Grafo posicionado
+    SI->>SI: Dibuja con WebGL (3D rapido)
+    SI-->>U: Ve red de conexiones
 ```
 
 ---
@@ -223,25 +175,25 @@ Cuando un usuario descarga una imagen de VORAEL, esa imagen lleva todos sus dato
 
 Además de los campos estándar, creamos un "espacio de nombres" propio llamado `XMP-vorael`. Es como crear una sección personalizada en la etiqueta de la imagen:
 
-```
-┌─────────────────────────────────────────┐
-│  METADATOS DE LA IMAGEN                 │
-│                                         │
-│  ═══ Campos estándar (cualquiera ve) ═══│
-│  Artista: "Corporación Americana"       │
-│  Descripción: "Un gato al atardecer"    │
-│  Tags: cat, sunset, nature              │
-│  Subject: "Gato al atardecer"           │
-│                                         │
-│  ═══ Campos VORAEL (nuestro namespace) ══│
-│  vorael:id = "img-001"                  │
-│  vorael:style = "Photorealistic"        │
-│  vorael:mood = "Calm"                   │
-│  vorael:useCase = "Wallpaper"           │
-│  vorael:palette = "#FFD700, #FF6B35"    │
-│  vorael:fileName = "cat-sunset.webp"    │
-│  vorael:createdAt = "2026-01-15"        │
-└─────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph IMAGEN["METADATOS DE LA IMAGEN"]
+        subgraph ESTANDAR["Campos estandar (cualquiera ve)"]
+            E1["Artista: Corporacion Americana"]
+            E2["Descripcion: Un gato al atardecer"]
+            E3["Tags: cat, sunset, nature"]
+            E4["Subject: Gato al atardecer"]
+        end
+        subgraph VORAEL["Campos VORAEL (nuestro namespace)"]
+            V1["vorael:id = img-001"]
+            V2["vorael:style = Photorealistic"]
+            V3["vorael:mood = Calm"]
+            V4["vorael:useCase = Wallpaper"]
+            V5["vorael:palette = #FFD700, #FF6B35"]
+            V6["vorael:fileName = cat-sunset.webp"]
+            V7["vorael:createdAt = 2026-01-15"]
+        end
+    end
 ```
 
 ### ¿Qué pasa si ExifTool no está instalado?
@@ -274,27 +226,13 @@ En VORAEL:
 
 ### Visualmente
 
-```
-                    ┌─────────┐
-                    │ cat     │
-                    │ (tag)   │
-                    └────┬────┘
-                         │
-              TAGGED_WITH│TAGGED_WITH
-                         │
-        ┌────────────────┼────────────────┐
-        │                │                │
-   ┌────▼────┐     ┌─────▼─────┐    ┌─────▼─────┐
-   │ img-001 │     │  img-009  │    │  img-030  │
-   │ (foto)  │     │ (foto)    │    │ (foto)    │
-   └────┬────┘     └─────┬─────┘    └───────────┘
-        │                │
-   HAS_STYLE        HAS_STYLE
-        │                │
-   ┌────▼────┐     ┌─────▼─────┐
-   │ Photo   │     │ 3D Render │
-   │ (style) │     │ (style)   │
-   └─────────┘     └───────────┘
+```mermaid
+flowchart TD
+    CAT["cat (tag)"] -->|TAGGED_WITH| IMG1["img-001 (foto)"]
+    CAT -->|TAGGED_WITH| IMG9["img-009 (foto)"]
+    CAT -->|TAGGED_WITH| IMG30["img-030 (foto)"]
+    IMG1 -->|HAS_STYLE| PHOTO["Photo (style)"]
+    IMG9 -->|HAS_STYLE| RENDER["3D Render (style)"]
 ```
 
 ### ¿Cómo se construye?
@@ -366,7 +304,7 @@ Las líneas muestran las conexiones.
 
 ```
 1. Abres /vorael/graph
-2. Ves 76 nodos y 175 aristas
+2. Ves 143 nodos y 507 aristas
 3. Haces click en "tag:cat"
 4. Se resaltan todas las imágenes que tienen "cat"
 5. Ves que img-001, img-009, img-030 están conectadas
@@ -397,11 +335,11 @@ Es como si un bibliotecario leyera tu pedido y dijera: "OK, necesito libros que 
 Cada palabra debe aparecer como **palabra completa**, no como parte de otra palabra:
 
 ```
-✅ "gato" matchea: "gato", "gatos" (plural mínimo)
-❌ "gato" NO matchea: "categoría", "agusete", "dátiles"
+[SÍ] "gato" matchea: "gato", "gatos" (plural mínimo)
+[NO] "gato" NO matchea: "categoría", "agusete", "dátiles"
 
-✅ "atardecer" matchea: "atardecer", "atardeceres"
-❌ "atardecer" NO matchea: "despertar", "madrugada"
+[SÍ] "atardecer" matchea: "atardecer", "atardeceres"
+[NO] "atardecer" NO matchea: "despertar", "madrugada"
 ```
 
 **Analogía:** Es como buscar en Google. Si buscas "gato", Google no te muestra resultados de "categoría" ni "agusete". Busca la palabra exacta.
@@ -410,16 +348,13 @@ Cada palabra debe aparecer como **palabra completa**, no como parte de otra pala
 
 No todas las coincidencias valen lo mismo. Una imagen que tiene "gato" como **tag** es más relevante que una donde "gato" aparece solo en la descripción larga.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  SISTEMA DE PUNTAJE                                     │
-│                                                         │
-│  Tag "gato" coincide        → +3 puntos  (¡muy bien!)  │
-│  Subject contiene "gato"    → +2 puntos  (bien)         │
-│  Prompt contiene "gato"     → +1 punto   (ok)           │
-│                                                         │
-│  Total = suma de todos los puntos                       │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph SISTEMA["SISTEMA DE PUNTAJE"]
+        T["Tag coincide"] -->|+3 puntos| TOTAL["Total = suma"]
+        S["Subject contiene"] -->|+2 puntos| TOTAL
+        P["Prompt contiene"] -->|+1 punto| TOTAL
+    end
 ```
 
 **Ejemplo real:**
@@ -432,7 +367,7 @@ Imagen 1: tags=[cat, sunset, nature], subject="Gato al atardecer"
   → tag "sunset" coincide: +3
   → subject contiene "gato": +2
   → subject contiene "atardecer": +2
-  → TOTAL: 10 puntos 🏆
+  → TOTAL: 10 puntos [TOP]
 
 Imagen 2: tags=[cat, library], subject="Gato en biblioteca"
   → tag "cat" coincide: +3
@@ -555,8 +490,8 @@ Los embeddings son la evolución natural de este sistema:
 
 ```
 Token-Match (actual):
-  "gato" = "gato" ✅
-  "felino" = "gato" ❌ (no sabe que son lo mismo)
+  "gato" = "gato" [SÍ]
+  "felino" = "gato" [NO] (no sabe que son lo mismo)
 
 Embeddings semánticos:
   "gato" = [0.23, -0.45, ...]
@@ -570,27 +505,14 @@ Embeddings semánticos:
 
 ## Resumen del algoritmo
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  BÚSQUEDA EN VORAEL                                     │
-│                                                         │
-│  1. Tokenizar: "gato atardecer" → ["gato", "atardecer"]│
-│                                                         │
-│  2. Token-Match: cada palabra debe aparecer completa    │
-│     ✅ "gato" matchea "gatos" (plural mínimo)          │
-│     ❌ "gato" NO matchea "categoría" (subcadena)       │
-│                                                         │
-│  3. Scoring: calcular relevancia                        │
-│     tags ×3 + subject ×2 + prompts ×1                  │
-│                                                         │
-│  4. Ordenar: mayor puntaje primero                      │
-│                                                         │
-│  5. Co-ocurrencia: encontrar imágenes similares         │
-│     Si "cat" y "sunset" aparecen juntos → relacionados │
-│                                                         │
-│  6. Jaccard: calcular similitud entre conjuntos         │
-│     Más vecinos compartidos = más parecida              │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A["1. Tokenizar: gato atardecer -> gato, atardecer"] --> B["2. Token-Match: palabra completa"]
+    B --> C["3. Scoring: tags x3 + subject x2 + prompts x1"]
+    C --> D["4. Ordenar: mayor puntaje primero"]
+    D --> E["5. Co-ocurrencia: tags que aparecen juntos"]
+    E --> F["6. Jaccard: calcular similitud entre conjuntos"]
+    F --> G["Resultado: imagenes ordenadas por relevancia"]
 ```
 
 **En una frase:** VORAEL busca por palabras completas, las pondera por importancia, y usa co-ocurrencia para encontrar imágenes similares. Es como un mini-Google pero optimizado para un catálogo de imágenes.
@@ -675,6 +597,24 @@ Cuando pides `GET /api/images?limit=2`:
   "hasMore": true
 }
 ```
+
+---
+
+## Simulación de Entorno con Datos Reales (Novedad)
+
+Para poder probar el sistema completo usando imágenes reales sin afectar el entorno de producción (S3), se implementó un sistema de **Simulación Local**.
+
+### ¿Cómo funciona la simulación?
+
+1. **Instalación de ExifTool:** Se instaló la dependencia nativa `libimage-exiftool-perl` en el servidor local para habilitar la incrustación física de metadatos.
+2. **Descarga de imágenes reales:** Se creó un script (`apps/api/src/scripts/simulate-local.ts`) que descarga en modo "solo lectura" hasta 30 imágenes directamente desde el bucket S3 de producción.
+3. **Incrustación de Metadatos:** El script inyecta los ricos metadatos de prueba (`mockData.ts`) directamente en el código binario de las imágenes descargadas (usando el namespace `XMP-vorael`).
+4. **Almacenamiento Local y DB:** Las imágenes modificadas se guardan en la carpeta `apps/api/test-images-real/` y el API de Express se configuró para servir esta carpeta estáticamente.
+5. **Actualización de PostgreSQL:** Finalmente, el script borra los registros antiguos en la base de datos de Docker y guarda los nuevos apuntando a las URL locales (`http://localhost:3001/test-images-real/...`).
+
+### ¿Por qué el Grafo dibuja estas imágenes?
+
+Con `DB_MOCK=false`, el motor de la aplicación **lee obligatoriamente de PostgreSQL**. Al haber actualizado la tabla `generated_images` en la base de datos Docker con nuestras imágenes reales descargadas y enriquecidas, el ciclo de auto-refresco del API (cada 60 segundos) detecta los nuevos datos. Automáticamente construye el grafo in-memory usando **Graphology** y el frontend (React/Sigma.js) dibuja la red interactiva con tus **fotos reales**.
 
 ---
 

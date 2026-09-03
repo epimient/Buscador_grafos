@@ -51,6 +51,9 @@ Tests live in `apps/api/test/`:
 - `search.test.ts` — search engine behavior
 - `graph.test.ts` — graph construction and querying
 - `graph-endpoint.test.ts` — GET /api/graph endpoint
+- `related.test.ts` — related images via graph similarity
+- `tags.test.ts` — tag listing and tag-images endpoint
+- `facets.test.ts` — filters and stats endpoints
 - `exif.test.ts` — metadata embedding (requires exiftool)
 - `metadata.test.ts` — metadata roundtrip (requires exiftool)
 
@@ -68,4 +71,9 @@ Tests live in `apps/api/test/`:
 
 ## Environment
 
-`apps/api/.env` is committed with `DB_MOCK=true` — safe for local dev. `apps/api/.env.production.example` shows the template for real credentials. Never commit real S3/DB passwords.
+- `apps/api/.env` is **gitignored** and NOT tracked (only `.env.example`/`.env.production.example` are tracked). Never commit real S3/DB passwords.
+- `DB_MOCK=true` (default) → uses `mockData.ts` (30 images) + `test-images/` (10 .webp placeholders). No DB, no S3 needed.
+- `DB_MOCK=false` → requires a running PostgreSQL. Local dev uses Docker: `sudo docker compose up -d` (port **5433**, user/pass `vorael`/`vorael123`). Schema in `deploy/init.sql`; seed with `pnpm seed:db`.
+- `SEARCH_ENGINE=graph` (default) → in-memory Graphology, refreshes every 60s. `SEARCH_ENGINE=sql` → falls back to PostgreSQL queries.
+- `apps/api/.env.production.example` shows the template for real credentials.
+- `test-images-real/` contains real images downloaded from S3 (for local simulation). These are large (~45MB) and untracked.

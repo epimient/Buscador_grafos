@@ -166,6 +166,7 @@ Cambió el API: `pnpm build:api`, reemplazar `/var/www/html/vorael/api/dist/` y
   hace falta abrirlo en el firewall.
 - **Postgres**: `DB_HOST=localhost` con `DB_PORT=9913` asume que la base corre
   en el mismo servidor. Si no, apuntar al host real y revisar `DB_SSL`.
+  Para desarrollo local se usa Docker en puerto **5433** (`docker-compose.yml`).
 - **Credenciales**: `apps/api/.env` (el local) tiene claves reales de Spaces y
   Postgres. No incluirlo en el paquete ni en ningún repositorio; el release
   script solo copia `.env.production.example`.

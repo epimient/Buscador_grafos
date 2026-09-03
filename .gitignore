@@ -1,22 +1,40 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
 release/
+
+# Environment files (contain secrets)
 .env
 .env.local
 .env.*.local
+
+# Logs
 *.log
+
+# OS
 .DS_Store
+
+# IDE
 .vscode/
 .idea/
+
+# Test coverage
 coverage/
+
+# Turbo
 .turbo/
 .cache/
 
-# Artefactos de `tsc -b` en apps/web (se regeneran en cada build)
+# TypeScript build info
 *.tsbuildinfo
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
 
-# Permisos locales de Claude Code (por máquina, no compartir)
+# Local permissions (per machine, not shared)
 .claude/settings.local.json
+
+# Real images downloaded from S3 (~45MB, not tracked)
+apps/api/test-images-real/

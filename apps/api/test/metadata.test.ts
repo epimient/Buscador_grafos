@@ -38,7 +38,7 @@ describe('readImageMetadata', () => {
       create: { width: 100, height: 100, channels: 3, background: '#00FF00' },
     }).webp().toBuffer();
 
-    const { buffer: embedded } = await embedMetadata({
+    const { buffer: embeddedBuf, embedded } = await embedMetadata({
       buffer: original,
       ext: 'webp',
       description: 'A test image',
@@ -55,7 +55,7 @@ describe('readImageMetadata', () => {
 
     expect(embedded).toBe(true);
 
-    const meta = await readImageMetadata(embedded, 'webp');
+    const meta = await readImageMetadata(embeddedBuf, 'webp');
     expect(meta.hasVoraelMeta).toBe(true);
     expect(meta.id).toBe('test-001');
     expect(meta.description).toBe('A test image');
@@ -81,7 +81,7 @@ describe('readImageMetadata', () => {
       create: { width: 100, height: 100, channels: 3, background: '#0000FF' },
     }).png().toBuffer();
 
-    const { buffer: embedded } = await embedMetadata({
+    const { buffer: embeddedBuf } = await embedMetadata({
       buffer: original,
       ext: 'png',
       description: 'PNG description',
@@ -89,7 +89,7 @@ describe('readImageMetadata', () => {
       tags: ['blue'],
     });
 
-    const meta = await readImageMetadata(embedded, 'png');
+    const meta = await readImageMetadata(embeddedBuf, 'png');
     expect(meta.description).toBe('PNG description');
     expect(meta.subject).toBe('PNG subject');
     expect(meta.tags).toContain('blue');

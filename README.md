@@ -37,7 +37,15 @@ cp apps/api/.env.example apps/api/.env
 cp apps/web/.env.example apps/web/.env
 ```
 
-Rellenar `apps/api/.env` con las credenciales de Postgres y Spaces, y arrancar:
+Rellenar `apps/api/.env` con las credenciales de Postgres y Spaces. Para
+desarrollo local con PostgreSQL real, arrancar Docker primero:
+
+```bash
+sudo docker compose up -d          # Postgres en puerto 5433
+cd apps/api && pnpm seed:db        # Carga 30 imágenes de prueba
+```
+
+Y arrancar:
 
 ```bash
 pnpm dev
@@ -79,6 +87,8 @@ Las imágenes pueden llevar metadatos XMP/EXIF/IPTC incrustados (namespace
 - **[ARQUITECTURA.md](ARQUITECTURA.md)** — cómo funciona, a dónde se conecta,
   las rutas del API, el esquema de la tabla, las variables de entorno, motor de
   grafos y detalles de la sub-ruta `/vorael/`.
+- **[docs/CHEATSHEET.md](docs/CHEATSHEET.md)** — mapa rápido del API: endpoints,
+  flujo de búsqueda, motor de grafos, modos de operación.
 - **[DEPLOY.md](DEPLOY.md)** — despliegue paso a paso en el servidor: Nginx,
   systemd, estructura de directorios, exiftool y verificación.
 - **[docs/PLAN_GRAFOS.md](docs/PLAN_GRAFOS.md)** — decisiones de diseño del

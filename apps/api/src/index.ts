@@ -4,6 +4,7 @@ import path from 'path';
 import { config } from './config';
 import { pingDb } from './db';
 import { graphStore, fetchAllRows } from './graph';
+import type { GraphStore } from './graph';
 import { imagesRouter } from './routes/images';
 import { searchRouter } from './routes/search';
 import { tagsRouter } from './routes/tags';
@@ -24,13 +25,25 @@ app.use(
 );
 app.use(express.json({ limit: '1mb' }));
 
-// Mock mode: serve test images as static files.
-if (config.mock) {
-  app.use('/test-images', express.static(path.join(__dirname, '../test-images')));
-}
+// Serve test images as static files (needed if DB contains mock URLs)
+app.use('/test-images', express.static(path.join(__dirname, '../test-images')));
+app.use('/test-images-real', express.static(path.join(__dirname, '../test-images-real')));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString() });
+  const snap = graphStore.snapshot;
+  res.json({
+    ok: true,
+    ts: new Date().toISOString(),
+    graph: snap
+      ? {
+          rows: snap.stats.total,
+          nodes: snap.graph.order,
+          edges: snap.graph.size,
+          builtAt: snap.builtAt.toISOString(),
+          buildMs: snap.buildMs,
+        }
+      : null,
+  });
 });
 
 app.use('/api/images', imagesRouter);
