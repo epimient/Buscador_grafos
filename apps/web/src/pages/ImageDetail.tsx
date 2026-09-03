@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { ArrowLeft, Check, ChevronDown, Download, Loader2, Sparkles, Tag as TagIcon } from 'lucide-react';
 import { useImage, useRelatedImages } from '@/hooks/useImages';
@@ -18,6 +18,7 @@ const FORMAT_LABELS: Record<DownloadFormat, { label: string; hint: string }> = {
 
 export function ImageDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
+  const location = useLocation();
   const { data: image, isLoading, error, refetch } = useImage(id);
   const { data: related } = useRelatedImages(id);
   const [downloading, setDownloading] = useState(false);
@@ -26,6 +27,17 @@ export function ImageDetailPage() {
   const [selectedFormat, setSelectedFormat] = useState<DownloadFormat>('webp');
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const relatedRef = useRef<HTMLElement>(null);
+  const requestedRelated = new URLSearchParams(location.search).get('related') === '1';
+
+  useEffect(() => {
+    if (!requestedRelated) return;
+    if (!related?.items?.length) return;
+    const t = window.setTimeout(() => {
+      relatedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [requestedRelated, related]);
 
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -258,7 +270,7 @@ export function ImageDetailPage() {
           No skeleton, no spinner, no placeholder: an empty/failed/loading
           /related response must produce zero layout. */}
       {related?.items && related.items.length > 0 && (
-        <section className="mt-12">
+        <section ref={relatedRef} className="mt-12 scroll-mt-20">
           <h2 className="mb-4 font-display text-xl font-semibold text-ink">Relacionadas</h2>
           <div className="columns-1 gap-4 sm:columns-2 md:columns-3 lg:columns-4">
             {related.items.map((rel, i) => (

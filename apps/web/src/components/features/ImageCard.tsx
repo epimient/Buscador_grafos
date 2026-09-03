@@ -1,6 +1,6 @@
 import { motion, type Variants } from 'framer-motion';
-import { Download, Eye } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Download, Eye, Network } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react';
 import type { Image } from '@/types/image';
 
@@ -28,6 +28,11 @@ const cardVariants: Variants = {
 
 export function ImageCard({ image, index = 0, onDownload }: Props) {
   const [loaded, setLoaded] = useState(false);
+  const navigate = useNavigate();
+
+  function goRelated() {
+    navigate(`/image/${image.id}?related=1`);
+  }
 
   return (
     <motion.article
@@ -50,7 +55,40 @@ export function ImageCard({ image, index = 0, onDownload }: Props) {
               loaded ? 'opacity-100' : 'opacity-0'
             }`}
           />
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-canvas/90 via-canvas/0 to-canvas/0 opacity-0 transition-opacity group-hover:opacity-100" />
+          {/* Overlay difuminado sobre la foto al hover */}
+          <div className="absolute inset-0 bg-canvas/70 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 group-hover:opacity-100" />
+          {/* Botones apilados, centrados encima de la foto */}
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-4 opacity-0 transition-opacity duration-200 group-hover:pointer-events-auto group-hover:opacity-100">
+            <Link to={`/image/${image.id}`} className="btn-ghost h-9 w-full whitespace-nowrap text-xs">
+              <Eye className="h-4 w-4" />
+              Ver
+            </Link>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                goRelated();
+              }}
+              className="btn-ghost h-9 w-full whitespace-nowrap text-xs"
+              title="Ver relacionadas"
+            >
+              <Network className="h-4 w-4" />
+              Relacionadas
+            </button>
+            {onDownload && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onDownload(image);
+                }}
+                className="btn-primary h-9 w-full whitespace-nowrap text-xs"
+              >
+                <Download className="h-4 w-4" />
+                Descargar
+              </button>
+            )}
+          </div>
         </div>
       </Link>
 
@@ -69,26 +107,6 @@ export function ImageCard({ image, index = 0, onDownload }: Props) {
             </Link>
           ))}
         </div>
-      </div>
-
-      <div className="pointer-events-none absolute inset-x-4 bottom-4 flex translate-y-2 items-center gap-2 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
-        <Link to={`/image/${image.id}`} className="btn-ghost h-9 flex-1 text-xs">
-          <Eye className="h-4 w-4" />
-          Ver
-        </Link>
-        {onDownload && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              onDownload(image);
-            }}
-            className="btn-primary h-9 flex-1 text-xs"
-          >
-            <Download className="h-4 w-4" />
-            Descargar
-          </button>
-        )}
       </div>
     </motion.article>
   );

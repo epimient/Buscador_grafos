@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VORAEL — Guía completa</title>
+<style>
+:root{
+  --bg:#1a1b26; --bg2:#16161e; --bg3:#1f2335; --bg4:#292e42;
+  --fg:#c0caf5; --fg2:#a9b1d6; --comment:#565f89;
+  --red:#f7768e; --orange:#ff9e64; --yellow:#e0af68;
+  --green:#9ece6a; --cyan:#7dcfff; --blue:#7aa2f7; --purple:#bb9af7;
+  --border:#2f334d; --line:#3b4261;
+}
+*{box-sizing:border-box; margin:0; padding:0;}
+html,body{height:100%;}
+body{
+  background:var(--bg); color:var(--fg);
+  font-family:"JetBrains Mono","Fira Code","Cascadia Code",ui-monospace,Menlo,Consolas,monospace;
+  font-size:17px; overflow:hidden;
+}
+/* ---------- deck ---------- */
+#deck{position:fixed; inset:0; overflow:hidden; background:
+  radial-gradient(1200px 600px at 80% -10%, rgba(122,162,247,0.06), transparent 60%),
+  radial-gradient(1000px 500px at 0% 110%, rgba(187,154,247,0.05), transparent 60%),
+  var(--bg);}
+.slide{
+  position:absolute; inset:0; padding:5.5vh 7vw 10vh;
+  overflow-y:auto; opacity:0; pointer-events:none;
+  transition:opacity .28s ease, transform .28s ease;
+}
+.slide.active{opacity:1; pointer-events:auto;}
+.slide.from-left{transform:translateX(-2.5%);}
+.slide.from-right{transform:translateX(2.5%);}
+.slide.active{transform:none;}
+::-webkit-scrollbar{width:10px;}
+::-webkit-scrollbar-track{background:var(--bg2);}
+::-webkit-scrollbar-thumb{background:var(--border); border-radius:6px;}
+
+/* ---------- typography ---------- */
+h1{font-size:3.6rem; font-weight:800; letter-spacing:-.02em; color:var(--fg);
+  text-shadow:0 0 30px rgba(122,162,247,.25);}
+h2{font-size:2.4rem; font-weight:800; color:var(--purple); margin-bottom:3vh;
+  display:flex; align-items:center; gap:.5em;}
+h2 .tag{font-size:.85rem; color:var(--comment); font-weight:500; border:1px solid var(--border);
+  padding:.15em .6em; border-radius:999px; white-space:nowrap;}
+h3{font-size:1.5rem; font-weight:700; color:var(--cyan); margin:1.6em 0 .5em;}
+h4{color:var(--yellow); font-size:1.05rem; margin-top:1.2em; margin-bottom:.5em;}
+p{margin:.5em 0 1em; line-height:1.55; color:var(--fg2);}
+strong{color:var(--fg); font-weight:700;}
+em{color:var(--cyan); font-style:normal;}
+ul,ol{margin:0 0 1.2em 1.3em; line-height:1.6; color:var(--fg2);}
+li{margin:.3em 0;}
+ul li::marker{color:var(--purple);}
+ol li::marker{color:var(--cyan); font-weight:700;}
+blockquote{border-left:3px solid var(--purple); padding:.6em 1.2em; margin:1.2em 0;
+  background:var(--bg3); color:var(--fg2); border-radius:0 8px 8px 0;}
+blockquote p{margin:.2em 0;}
+
+/* ---------- code ---------- */
+pre{background:var(--bg2); border:1px solid var(--border); border-radius:10px;
+  padding:1.1em 1.3em; margin:1em 0; overflow-x:auto; font-size:.86rem; line-height:1.55;}
+code{font-family:inherit;}
+.hl{color:var(--green);} .hk{color:var(--purple);} .hn{color:var(--orange);}
+.hc{color:var(--comment);} .hs{color:var(--yellow);} .hd{color:var(--cyan);}
+
+/* ---------- boxes ---------- */
+.card{background:var(--bg3); border:1px solid var(--border); border-radius:12px;
+  padding:1.3em 1.6em; margin:1.2em 0;}
+.grid{display:grid; gap:1.2em; margin:1.2em 0;}
+.grid.cols-2{grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
+.grid.cols-3{grid-template-columns:repeat(auto-fit,minmax(220px,1fr));}
+.flag{display:inline-block; font-weight:800; color:var(--bg2); border-radius:5px; padding:.05em .45em; margin-right:.4em;}
+.flag.yes{background:var(--green);} .flag.no{background:var(--red);}
+.flag.warn{background:var(--yellow);} .flag.info{background:var(--cyan);}
+.flag.purple{background:var(--purple);} .flag.blue{background:var(--blue);}
+.flag.orange{background:var(--orange);}
+
+/* ---------- tables ---------- */
+table{width:100%; border-collapse:collapse; margin:1.2em 0; font-size:.86rem;}
+th{background:var(--bg4); color:var(--cyan); text-align:left; padding:.65em .8em;
+  font-weight:700; border-bottom:2px solid var(--line);}
+td{padding:.6em .8em; border-bottom:1px solid var(--border); vertical-align:top; color:var(--fg2);}
+tr:hover td{background:var(--bg3);}
+td:first-child, th:first-child{color:var(--purple); font-weight:600; white-space:nowrap;}
+
+/* ---------- diagrams ---------- */
+.diagram{display:flex; flex-direction:column; gap:.6em; background:var(--bg2);
+  border:1px solid var(--border); border-radius:10px; padding:1.4em; margin:1.2em 0;}
+.chip{display:inline-flex; align-items:center; gap:.5em; background:var(--bg3);
+  border:1px solid var(--line); border-radius:8px; padding:.5em .9em; font-size:.85rem; color:var(--fg2);}
+.chip .dot{width:.6em; height:.6em; border-radius:50%; flex:none;}
+.row{display:flex; align-items:center; gap:.6em; flex-wrap:wrap;}
+.arrow{color:var(--comment); font-weight:800; letter-spacing:.05em; flex:none;}
+.branch{display:flex; flex-direction:column; gap:.4em; margin-left:1.4em; padding-left:1em; border-left:1px dashed var(--line);}
+.note{font-size:.78rem; color:var(--comment); font-style:italic;}
+
+/* ---------- kbd/status ---------- */
+.kbd{display:inline-block; background:var(--bg4); border:1px solid var(--line);
+  border-bottom-width:3px; border-radius:5px; padding:.05em .5em; font-size:.8em; color:var(--fg);}
+
+/* ---------- title slide ---------- */
+.title{display:flex; flex-direction:column; justify-content:center; align-items:flex-start; text-align:left;}
+.title .prompt{font-size:1.2rem; color:var(--comment); margin-bottom:1.4em;}
+.title .prompt b{color:var(--green); font-weight:700;}
+.title .bar{display:flex; gap:.5em; margin-top:2em;}
+.title .bar .kbd{font-size:.95rem;}
+.title h1 .caret{display:inline-block; width:.6em; height:1.3em; background:var(--purple);
+  vertical-align:text-bottom; animation:blink 1s steps(1) infinite;}
+@keyframes blink{50%{opacity:0;}}
+.big-emoji{font-size:2rem;}
+
+/* ---------- bottom status bar ---------- */
+#bar{position:fixed; bottom:0; left:0; right:0; height:6.5vh; background:var(--bg2);
+  border-top:1px solid var(--border); display:flex; align-items:center; justify-content:space-between;
+  padding:0 1.4vw; font-size:.85rem; color:var(--comment); z-index:50; white-space:nowrap;}
+#bar .mode{color:var(--green); font-weight:800;}
+#bar .count b{color:var(--purple);}
+#bar .nav .kbd{margin-right:.2em;}
+#progress{position:fixed; bottom:6.5vh; left:0; height:3px; background:var(--purple); z-index:51; transition:width .2s;}
+
+/* centered text helper */
+.center{display:flex; flex-direction:column; justify-content:center; height:100%;}
+.big{font-size:1.5rem;}
+.hr{border:none; border-top:1px dashed var(--line); margin:1.6em 0;}
+.footer-note{font-size:.8rem; color:var(--comment);}
+</style>
+</head>
+<body>
+
+<div id="deck">
+<!-- ============================== S1 TITLE ============================== -->
+<section class="slide active title">
+  <div class="big-emoji">~</div>
+  <h1>VORAEL<span class="caret"></span></h1>
+  <div class="prompt"><b>$</b> banco de imágenes generadas por IA</div>
+  <p>Corporación Universitaria Americana<br>
+  <a href="https://n8n.americana.edu.co/vorael/" style="color:var(--cyan)">https://n8n.americana.edu.co/vorael/</a></p>
+  <p style="font-size:.95rem; color:var(--comment)">Guía completa — preparada para la reunión</p>
+  <div class="bar">
+    <span class="kbd">j/k</span><span class="kbd">←→</span><span class="kbd">space</span> navegar
+    <span class="kbd">PgUp/PgDn</span>
+    <span class="kbd">Home/End</span>
+    <span class="kbd">f</span> pantalla completa
+  </div>
+</section>
+
+<!-- ============================== S2 QUE ES ============================== -->
+<section class="slide">
+  <h2>¿Qué es VORAEL? <span class="tag">01</span></h2>
+  <p>VORAEL es un <strong>catálogo de imágenes generadas por inteligencia artificial</strong> para la Universidad.</p>
+  <blockquote><p>Piensen en él como un <strong>Pinterest interno</strong>: n8n genera las imágenes, las guarda en la nube, y VORAEL las muestra en una galería donde se pueden <em>buscar, filtrar y descargar</em>.</p></blockquote>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4><span class="flag no">NO</span> Lo que VORAEL <span style="color:var(--red)">NO</span> hace</h4>
+      <ul>
+        <li><span class="flag no">x</span> No genera imágenes (eso lo hace n8n)</li>
+        <li><span class="flag no">x</span> No sube imágenes (también n8n)</li>
+        <li><span class="flag no">x</span> No edita imágenes</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4><span class="flag yes">OK</span> Lo que VORAEL <span style="color:var(--green)">SÍ</span> hace</h4>
+      <ul>
+        <li><span class="flag yes">✓</span> Muestra imágenes en galería con filtros</li>
+        <li><span class="flag yes">✓</span> Busca por palabras clave</li>
+        <li><span class="flag yes">✓</span> Muestra relaciones entre imágenes</li>
+        <li><span class="flag yes">✓</span> Descarga en diferentes formatos</li>
+        <li><span class="flag yes">✓</span> Incrusta metadatos al descargar</li>
+        <li><span class="flag yes">✓</span> Grafo visual de conexiones</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== S3 STACK ============================== -->
+<section class="slide">
+  <h2>El equipo técnico (stack) <span class="tag">02</span></h2>
+  <p>Piensen en el sistema como una <strong>casa con varias habitaciones</strong>.</p>
+  <h3>La casa completa</h3>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--blue)"></span>USUARIOS<br><span class="note">navegadores</span></span><span class="arrow">│</span><span class="chip"><span class="dot" style="background:var(--red)"></span>Nginx<br><span class="note">HTTPS</span></span></div>
+    <div class="row" style="margin-left:1.4em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="arrow">├─►</span><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Galería<br><span class="note">React</span></span>
+      <span class="arrow">└─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>API<br><span class="note">Express</span></span>
+    </div>
+    <div class="row" style="margin-left:1.4em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="arrow">└─►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>PostgreSQL<br><span class="note">datos</span></span>
+      <span class="arrow">└─►</span><span class="chip"><span class="dot" style="background:var(--orange)"></span>DigitalOcean Spaces<br><span class="note">S3</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== S4 PIEZAS ============================== -->
+<section class="slide">
+  <h2>Cada pieza explicada <span class="tag">02</span></h2>
+  <table>
+    <thead><tr><th>Pieza</th><th>En palabras simples</th><th>Ejemplo cotidiano</th></tr></thead>
+    <tbody>
+      <tr><td>Nginx</td><td>El portero de la edificio. Redirige las peticiones de internet.</td><td>La recepcionista que dice "su cita es en el piso 3"</td></tr>
+      <tr><td>React (SPA)</td><td>La interfaz visual. Single Page App: todo se carga una vez.</td><td>Como Gmail: cargas y todo se mueve sin recargar</td></tr>
+      <tr><td>Express (API)</td><td>El cerebro. Recibe peticiones, consulta datos, devuelve JSON.</td><td>Como un mesero: toma el pedido, va a la cocina, trae la comida</td></tr>
+      <tr><td>PostgreSQL</td><td>La base de datos. Guarda la info en tablas organizadas.</td><td>Una hoja de Excel gigante: nombre, tags, estilo…</td></tr>
+      <tr><td>Spaces (S3)</td><td>Almacenamiento en la nube. Aquí viven los archivos de imagen.</td><td>Un Dropbox pero para el sistema</td></tr>
+      <tr><td>Sharp</td><td>Convierte imágenes (PNG→WebP), redimensiona, optimiza.</td><td>Photoshop pero automático y rápido</td></tr>
+      <tr><td>ExifTool</td><td>Lee/escribe metadatos en imágenes.</td><td>"Notas pegadas" a la foto: "tomada en París, 2024"</td></tr>
+      <tr><td>Graphology</td><td>Maneja grafos (nodos conectados con líneas) para buscar.</td><td>Mapa del metro: estaciones + líneas</td></tr>
+      <tr><td>Sigma.js</td><td>Dibuja grafos en pantalla con WebGL 3D rápido.</td><td>Google Maps pero para mostrar relaciones</td></tr>
+      <tr><td>TanStack Query</td><td>Maneja cómo el frontend pide datos y los cachea.</td><td>Un bibliotecario que recuerda los libros que pediste</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== S5 FLUJO 1 ============================== -->
+<section class="slide">
+  <h2>Flujo 1 — Llega una imagen nueva <span class="tag">03</span></h2>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--red)"></span>n8n</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>n8n genera imagen con IA</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--red)"></span>n8n</span></div>
+    <div class="row" style="margin-left:1.4em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="chip"><span class="dot" style="background:var(--orange)"></span>Sube imagen</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--orange)"></span>DigitalOcean Spaces S3</span>
+    </div>
+    <div class="row" style="margin-left:1.4em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="chip"><span class="dot" style="background:var(--green)"></span>Escribe datos<br><span class="note">id, tags, style, mood, subject, prompt</span></span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>PostgreSQL</span>
+    </div>
+    <div class="row" style="margin-left:1.4em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="chip"><span class="dot" style="background:var(--purple)"></span>VORAEL</span><span class="arrow">─► detecta cambio cada 60s ─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>VORAEL actualiza grafo en memoria</span>
+    </div>
+    <div class="row" style="margin-left:1.4em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>VORAEL: ve, busca y descarga</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== S6 FLUJO 2 ============================== -->
+<section class="slide">
+  <h2>Flujo 2 — El usuario busca "gato" <span class="tag">03</span></h2>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario</span><span class="arrow">escribe "gato" ─►</span><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span><span class="arrow">GET /api/search?q=gato ─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>Grafo en memoria<br><span class="note">busca tag "cat", subject "gato", prompts "gato"</span></span><span class="arrow">◄─ coincidencias ─</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">calcula puntaje</span><span class="chip"><span class="dot" style="background:var(--comment)"></span>tag +3 · subject +2 · prompt +1</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">imágenes ordenadas ─►</span><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario ve resultados</span></div>
+  </div>
+</section>
+
+<!-- ============================== S7 FLUJO 3 ============================== -->
+<section class="slide">
+  <h2>Flujo 3 — Descarga de una imagen <span class="tag">03</span></h2>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario</span><span class="arrow">"Descargar como WebP" ─►</span><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span><span class="arrow">GET /api/images/img-001/download?format=webp ─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>PostgreSQL<br><span class="note">obtiene s3_key</span></span><span class="arrow">s3_key ◄─</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">descarga original ─►</span><span class="chip"><span class="dot" style="background:var(--orange)"></span>DigitalOcean S3</span><span class="arrow">◄─ archivo ─</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">convierte ─►</span><span class="chip"><span class="dot" style="background:var(--blue)"></span>Sharp<br><span class="note">WebP lossless</span></span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">incrusta metadatos ─►</span><span class="chip"><span class="dot" style="background:var(--yellow)"></span>ExifTool<br><span class="note">EXIF, IPTC, XMP, XMP-vorael</span></span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">archivo modificado ─►</span><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario descarga</span></div>
+  </div>
+</section>
+
+<!-- ============================== S8 FLUJO 4 ============================== -->
+<section class="slide">
+  <h2>Flujo 4 — Grafo visual (la red) <span class="tag">03</span></h2>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario</span><span class="arrow">abre /vorael/graph ─►</span><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span><span class="arrow">GET /api/graph?limit=200 ─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--purple)"></span>API</span><span class="arrow">serializa</span><span class="chip"><span class="dot" style="background:var(--green)"></span>Grafo en memoria<br><span class="note">143 nodos, 507 aristas</span></span><span class="arrow">─► nodes + edges</span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--blue)"></span>Frontend</span><span class="arrow">crea grafo ─►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>Graphology<br><span class="note">layout force-directed (50 iteraciones)</span></span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--green)"></span>Graphology</span><span class="arrow">grafo posicionado ─►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>Sigma.js<br><span class="note">dibuja con WebGL (3D rápido)</span></span><span class="arrow">─►</span><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Usuario ve la red</span></div>
+  </div>
+</section>
+
+<!-- ============================== S9 METADATOS ============================== -->
+<section class="slide">
+  <h2>Metadatos incrustados <span class="tag">04</span></h2>
+  <h3>¿Qué son los metadatos?</h3>
+  <p>Son <strong>información oculta que viaja dentro del archivo de imagen</strong>. No se ve en la foto, pero cualquier programa puede leerla.</p>
+  <div class="card">
+    <p><strong>Analogía:</strong> escribir en la espalda de una fotografía impresa:
+    <ul><li>"Tomada en París, 2024"</li><li>"Fotógrafo: Juan Pérez"</li><li>"Evento: Boda de María"</li></ul>
+    En las imágenes digitales, esto se guarda en cabeceras especiales: <em>EXIF, IPTC, XMP</em>.</p>
+  </div>
+  <h3>¿Por qué incrustar metadatos?</h3>
+  <blockquote><p>Cuando un usuario descarga una imagen, esa imagen lleva <strong>todos sus datos consigo</strong>. Si la comparte por WhatsApp, Instagram o la guarda en su computadora, <em>la información no se pierde</em>.</p></blockquote>
+</section>
+
+<!-- ============================== S10 TIPOS ============================== -->
+<section class="slide">
+  <h2>Los tres tipos de metadatos <span class="tag">04</span></h2>
+  <table>
+    <thead><tr><th>Tipo</th><th>Qué guarda</th><th>Ejemplo</th><th>¿Quién lo lee?</th></tr></thead>
+    <tbody>
+      <tr><td>EXIF</td><td>Datos técnicos y descripción</td><td>Artista, descripción, fecha</td><td class="hl">Cualquier programa de fotos</td></tr>
+      <tr><td>IPTC</td><td>Palabras clave y categoría</td><td>Tags: "cat, sunset, nature"</td><td class="hl">Adobe Bridge, Lightroom</td></tr>
+      <tr><td>XMP</td><td>Datos estructurados</td><td>Subject, título</td><td class="hl">Photoshop, ExifTool</td></tr>
+    </tbody>
+  </table>
+  <h3>Nuestro namespace: XMP-vorael</h3>
+  <p>Además de los campos estándar, creamos un <strong>"espacio de nombres" propio</strong> llamado <span class="hd">XMP-vorael</span> — como una sección personalizada en la etiqueta de la imagen.</p>
+  <div class="diagram">
+    <div class="row">
+      <div class="card" style="flex:1; margin:0">
+        <h4>Campos estándar <span class="note">(cualquiera ve)</span></h4>
+        <ul style="font-size:.82rem">
+          <li><span class="hd">Artista:</span> Corporación Americana</li>
+          <li><span class="hd">Descripción:</span> Un gato al atardecer</li>
+          <li><span class="hd">Tags:</span> cat, sunset, nature</li>
+          <li><span class="hd">Subject:</span> Gato al atardecer</li>
+        </ul>
+      </div>
+      <div class="card" style="flex:1; margin:0">
+        <h4>Campos VORAEL <span class="note">(namespace propio)</span></h4>
+        <ul style="font-size:.82rem">
+          <li><span class="hl">vorael:id</span> = img-001</li>
+          <li><span class="hl">vorael:style</span> = Photorealistic</li>
+          <li><span class="hl">vorael:mood</span> = Calm</li>
+          <li><span class="hl">vorael:useCase</span> = Wallpaper</li>
+          <li><span class="hl">vorael:palette</span> = #FFD700, #FF6B35</li>
+          <li><span class="hl">vorael:fileName</span> = cat-sunset.webp</li>
+          <li><span class="hl">vorael:createdAt</span> = 2026-01-15</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== S11 EXIFTOOL AUSENTE ============================== -->
+<section class="slide">
+  <h2>¿Si ExifTool no está instalado? <span class="tag">04</span></h2>
+  <p><span class="flag yes">OK</span> <strong>No pasa nada.</strong></p>
+  <div class="card">
+    <ul>
+      <li><span class="flag warn">i</span> Las imágenes se sirven <strong>sin metadatos</strong> (pero se ven igual)</li>
+      <li><span class="flag warn">i</span> No aparece ningún error en pantalla</li>
+      <li><span class="flag warn">i</span> El usuario no se entera</li>
+    </ul>
+  </div>
+  <blockquote><p>Es como un <strong>coche híbrido</strong>: si se acaba la batería eléctrica, funciona con gasolina.</p></blockquote>
+  <p class="note">El sistema detecta si ExifTool existe al arrancar y degrada con elegancia.</p>
+</section>
+
+<!-- ============================== S12 GRAFO ============================== -->
+<section class="slide">
+  <h2>El motor de búsqueda por grafos <span class="tag">05</span></h2>
+  <h3>¿Qué es un grafo?</h3>
+  <p>Un grafo es una estructura de datos que muestra <strong>relaciones entre cosas</strong>.</p>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>Ejemplo: Facebook</h4>
+      <ul>
+        <li>Tú eres un <strong>nodo</strong> (punto)</li>
+        <li>Tu amigo Pedro es otro <strong>nodo</strong></li>
+        <li>La línea que los conecta es una <strong>arista</strong> (relación "amigos")</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>En VORAEL</h4>
+      <ul>
+        <li>Cada imagen es un nodo</li>
+        <li>Cada tag es un nodo</li>
+        <li>Cada estilo es un nodo</li>
+        <li>Las líneas muestran qué tags tiene cada imagen</li>
+      </ul>
+    </div>
+  </div>
+  <h3>Visualmente</h3>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--yellow)"></span>cat (tag)</span><span class="arrow">──TAGGED_WITH──►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>img-001 (foto)</span></div>
+    <div class="row" style="margin-left:2.2em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="arrow">►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>img-009 (foto)</span><span class="arrow">──HAS_STYLE──►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>3D Render (style)</span>
+    </div>
+    <div class="row" style="margin-left:2.2em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="arrow">►</span><span class="chip"><span class="dot" style="background:var(--purple)"></span>img-030 (foto)</span>
+    </div>
+    <div class="row" style="margin-left:2.2em; border-left:1px dashed var(--line); padding-left:1em;">
+      <span class="chip"><span class="dot" style="background:var(--purple)"></span>img-001</span><span class="arrow">──HAS_STYLE──►</span><span class="chip"><span class="dot" style="background:var(--green)"></span>Photo (style)</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== S13 CONSTRUCCION ============================== -->
+<section class="slide">
+  <h2>¿Cómo se construye el grafo? <span class="tag">05</span></h2>
+  <p>Cuando arranca el API, lee todas las imágenes de PostgreSQL y crea:</p>
+  <ol>
+    <li>Un nodo por cada <strong>imagen</strong> (ej: <span class="hl">img-001</span>)</li>
+    <li>Un nodo por cada <strong>tag</strong> (ej: <span class="hl">tag:cat</span>)</li>
+    <li>Un nodo por cada <strong>estilo</strong> (ej: <span class="hl">style:Photorealistic</span>)</li>
+    <li>Un nodo por cada <strong>mood</strong> (ej: <span class="hl">mood:Calm</span>)</li>
+    <li>Un nodo por cada <strong>color</strong> (ej: <span class="hl">color:#FFD700</span>)</li>
+    <li>Líneas conectando cada imagen con sus tags, estilos, moods y colores</li>
+    <li>Líneas entre tags que aparecen juntos <em>(co-ocurrencia)</em></li>
+  </ol>
+  <div class="hr"></div>
+  <h3>¿Cómo se busca?</h3>
+  <p>Cuando buscas <strong>"cat sunset"</strong>, el sistema:</p>
+  <ol>
+    <li>Tokeniza: <span class="hl">["cat", "sunset"]</span></li>
+    <li>Para cada imagen verifica: <span class="flag orange">+3</span> tag coincide · <span class="flag blue">+2</span> subject contiene · <span class="flag cyan">+1</span> aparece en prompts</li>
+    <li>Ordena por puntaje total</li>
+    <li>Devuelve las más relevantes</li>
+  </ol>
+</section>
+
+<!-- ============================== S14 RELATED ============================== -->
+<section class="slide">
+  <h2>Imágenes relacionadas ("related") <span class="tag">05</span></h2>
+  <p>Cuando ves una imagen y haces click en <strong>"Ver relacionadas"</strong>, el sistema:</p>
+  <ol>
+    <li>Busca los <strong>vecinos directos</strong> de esa imagen en el grafo</li>
+    <li>Para cada otra imagen, <strong>cuenta cuántos vecinos comparten</strong></li>
+    <li>Cuantos más vecinos compartan, <strong>más similares</strong> son</li>
+    <li>Si dos tags aparecen juntos muchas veces, <em>suma puntos extra</em></li>
+    <li>Devuelve las <strong>top 8</strong> más parecidas</li>
+  </ol>
+  <div class="card">
+    <p><span class="flag blue">i</span> <strong>Concepto clave:</strong> la similitud se basa en el <em>entorno del nodo</em> en el grafo, no en comparar contenido de la imagen.</p>
+  </div>
+</section>
+
+<!-- ============================== S15 VISTA GRAFO ============================== -->
+<section class="slide">
+  <h2>Vista de grafo interactivo <span class="tag">06</span></h2>
+  <h3>¿Qué muestra? — Una red visual</h3>
+  <div class="grid cols-3">
+    <div class="card"><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--purple)"></span> Imagen → punto <strong style="color:var(--purple)">púrpura</strong></div>
+    <div class="card"><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--yellow)"></span> Tag → punto <strong style="color:var(--yellow)">ámbar</strong></div>
+    <div class="card"><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--green)"></span> Estilo → punto <strong style="color:var(--green)">verde</strong></div>
+    <div class="card"><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--purple)"></span> Mood → punto <strong style="color:#c8a2f0">púrpura</strong></div>
+    <div class="card"><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:var(--cyan)"></span> Caso de uso → punto <strong style="color:var(--cyan)">cian</strong></div>
+    <div class="card"><span class="dot" style="display:inline-block;width:.6em;height:.6em;border-radius:50%;background:#8a8fad"></span> Color → punto <strong style="color:#8a8fad">gris</strong></div>
+  </div>
+  <p class="note">Las líneas muestran las conexiones.</p>
+</section>
+
+<!-- ============================== S16 COMO FUNCIONA GRAFO ============================== -->
+<section class="slide">
+  <h2>¿Cómo funciona la vista? <span class="tag">06</span></h2>
+  <div class="card">
+    <h4><span class="flag info">1</span> Render WebGL</h4>
+    <p><strong>Sigma.js</strong> dibuja todo usando <em>WebGL</em> — la misma tecnología de los videojuegos 3D.</p>
+  </div>
+  <div class="card">
+    <h4><span class="flag info">2</span> Layout force-directed</h4>
+    <p>Los nodos se posicionan automáticamente:
+      <ul>
+        <li>Los nodos se <strong>repelen</strong> (como imanes del mismo polo)</li>
+        <li>Los nodos conectados se <strong>atraen</strong> (como resortes)</li>
+        <li>Todo se centra en el medio</li>
+      </ul></p>
+  </div>
+  <div class="card">
+    <h4><span class="flag info">3</span> Click en un nodo</h4>
+    <ul>
+      <li>Es una imagen → te lleva al <strong>detalle</strong></li>
+      <li>Es un tag → te lleva a la <strong>galería de ese tag</strong></li>
+      <li>Es un estilo/mood → <strong>resalta sus conexiones</strong></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4><span class="flag info">4</span> Filtro por tipo</h4>
+    <p>Puedes <strong>filtrar</strong> por tipo con los botones de arriba.</p>
+  </div>
+</section>
+
+<!-- ============================== S17 EJEMPLO INTERACCION ============================== -->
+<section class="slide">
+  <h2>Ejemplo de interacción <span class="tag">06</span></h2>
+  <pre><span class="hc">1.</span> <span class="hd">Abre</span> /vorael/graph
+<span class="hc">2.</span> Ves <span class="hl">143 nodos</span> y <span class="hl">507 aristas</span>
+<span class="hc">3.</span> Haces click en <span class="hk">"tag:cat"</span>
+<span class="hc">4.</span> Se resaltan todas las imágenes que tienen <span class="hs">"cat"</span>
+<span class="hc">5.</span> Ves que <span class="hn">img-001</span>, <span class="hn">img-009</span>, <span class="hn">img-030</span> están conectadas
+<span class="hc">6.</span> Haces click en <span class="hn">img-001</span>
+<span class="hc">7.</span> Te lleva al <span class="hk">detalle</span> de esa imagen</pre>
+</section>
+
+<!-- ============================== S18 ALGO TOKENIZAR ============================== -->
+<section class="slide">
+  <h2>Algoritmo — Tokenizar <span class="tag">07</span></h2>
+  <p>Cuando escribes <strong>"gato atardecer"</strong>, VORAEL <em>no</em> hace una búsqueda tonta como <span class="hl">ILIKE '%gato%'</span> (que pegaba en "categoría"). Usa un algoritmo más inteligente.</p>
+  <h3>Paso 1: separar en palabras</h3>
+  <p>El sistema separa tu búsqueda en palabras individuales:</p>
+  <pre>"gato atardecer" <span class="arrow">→</span> <span class="hl">["gato", "atardecer"]</span></pre>
+  <blockquote><p>Como si un bibliotecario leyera tu pedido y dijera: "OK, necesito libros que tengan 'gato' <strong>Y</strong> también tengan 'atardecer'".</p></blockquote>
+</section>
+
+<!-- ============================== S19 ALGO TOKEN-MATCH ============================== -->
+<section class="slide">
+  <h2>Algoritmo — Token-Match <span class="tag">07</span></h2>
+  <p><strong>Paso 2:</strong> Cada palabra debe aparecer como <em>palabra completa</em>, no como parte de otra palabra.</p>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4><span class="flag yes">SÍ</span> "gato" matchea</h4>
+      <ul><li>"gato"</li><li>"gatos" (plural mínimo)</li></ul>
+      <h4 style="color:var(--yellow)"><span class="flag yes">SÍ</span> "atardecer" matchea</h4>
+      <ul><li>"atardecer"</li><li>"atardeceres"</li></ul>
+    </div>
+    <div class="card">
+      <h4 style="color:var(--red)"><span class="flag no">NO</span> "gato" NO matchea</h4>
+      <ul><li>"categoría"</li><li>"agusete"</li><li>"dátiles"</li></ul>
+      <h4 style="color:var(--red)"><span class="flag no">NO</span> "atardecer" NO matchea</h4>
+      <ul><li>"despertar"</li><li>"madrugada"</li></ul>
+    </div>
+  </div>
+  <blockquote><p><strong>Analogía:</strong> como buscar en Google. Si buscas "gato", Google no muestra resultados de "categoría" ni "agusete". Busca la palabra exacta.</p></blockquote>
+</section>
+
+<!-- ============================== S20 ALGO SCORING ============================== -->
+<section class="slide">
+  <h2>Algoritmo — Scoring <span class="tag">07</span></h2>
+  <p><strong>Paso 3:</strong> No todas las coincidencias valen lo mismo. Una imagen con "gato" como <em>tag</em> es más relevante que una donde aparece solo en la descripción.</p>
+  <div class="diagram">
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--yellow)"></span>Tag coincide</span><span class="arrow">─► <span class="hl">+3 puntos</span></span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--blue)"></span>Subject contiene</span><span class="arrow">─► <span class="hl">+2 puntos</span></span></div>
+    <div class="row"><span class="chip"><span class="dot" style="background:var(--cyan)"></span>Prompt contiene</span><span class="arrow">─► <span class="hl">+1 punto</span></span></div>
+    <div class="row"><span class="arrow">⇩</span><span class="chip"><span class="dot" style="background:var(--purple)"></span><strong>TOTAL = suma de puntos</strong></span></div>
+  </div>
+</section>
+
+<!-- ============================== S21 EJEMPLO REAL ============================== -->
+<section class="slide">
+  <h2>Ejemplo real de scoring <span class="tag">07</span></h2>
+  <p><strong>Query:</strong> "gato atardecer"</p>
+  <div class="card">
+    <h4>Imagen 1: <span class="note">tags=[cat, sunset, nature] · subject="Gato al atardecer"</span></h4>
+    <ul>
+      <li>tag "cat" coincide: <span class="flag orange">+3</span></li>
+      <li>tag "sunset" coincide: <span class="flag orange">+3</span></li>
+      <li>subject contiene "gato": <span class="flag blue">+2</span></li>
+      <li>subject contiene "atardecer": <span class="flag blue">+2</span></li>
+      <li class="hl" style="font-weight:700">TOTAL: 10 puntos</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Imagen 2: <span class="note">tags=[cat, library] · subject="Gato en biblioteca"</span></h4>
+    <ul>
+      <li>tag "cat" coincide: <span class="flag orange">+3</span></li>
+      <li>tag "sunset" NO coincide: <span class="flag no">+0</span></li>
+      <li>subject contiene "gato": <span class="flag blue">+2</span></li>
+      <li>subject contiene "atardecer": <span class="flag no">+0</span></li>
+      <li class="hl" style="font-weight:700">TOTAL: 5 puntos</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Imagen 3: <span class="note">tags=[dog, park] · subject="Perro en parque"</span></h4>
+    <ul>
+      <li>Nada coincide: <span class="flag no">+0 +0 +0 +0</span></li>
+      <li class="hl" style="font-weight:700">TOTAL: 0 puntos</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================== S22 ORDENAR ============================== -->
+<section class="slide">
+  <h2>Algoritmo — Ordenar y devolver <span class="tag">07</span></h2>
+  <p><strong>Paso 4:</strong> Las imágenes se ordenan por puntaje (mayor a menor) y se devuelven las mejores.</p>
+  <div class="diagram">
+    <div class="row"><span class="flag green">1</span><span class="hl">Imagen 1 (10 pts)</span><span class="arrow">→ ¡la más relevante!</span></div>
+    <div class="row"><span class="flag blue">2</span><span>Imagen 2 (5 pts)</span></div>
+    <div class="row"><span class="flag no">3</span><span>Imagen 3 (0 pts) → no aparece en resultados</span></div>
+  </div>
+  <blockquote><p>En una frase: <strong>busca por palabras completas</strong>, las pondera por importancia, y usa <em>co-ocurrencia</em> para encontrar imágenes similares.</p></blockquote>
+</section>
+
+<!-- ============================== S23 CO-OCURRENCIA ============================== -->
+<section class="slide">
+  <h2>Co-ocurrencia <span class="tag">08</span></h2>
+  <h3>¿Qué es?</h3>
+  <p>Cuando dos tags aparecen <strong>juntos</strong> en muchas imágenes, tienen una relación fuerte. Esto se llama <em>análisis de co-ocurrencia</em>.</p>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>Ejemplo: Netflix</h4>
+      <ul>
+        <li>Si mucha gente que ve "Breaking Bad" también ve "Better Call Saul"…</li>
+        <li>Netflix aprende que están relacionados</li>
+        <li>Cuando buscas uno, te muestra el otro</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>En VORAEL</h4>
+      <ul>
+        <li>Si "cat" y "sunset" aparecen juntos en 5 imágenes…</li>
+        <li>El sistema sabe que están relacionadas</li>
+        <li>Cuando ves "cat", te muestra otras con "sunset"</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================== S24 COMO SE CALCULA ============================== -->
+<section class="slide">
+  <h2>¿Cómo se calcula? <span class="tag">08</span></h2>
+  <pre>
+<span class="hd">IMG-001</span>: tags = [cat, sunset, nature]
+<span class="hd">IMG-009</span>: tags = [cat, cyberpunk, neon]
+<span class="hd">IMG-030</span>: tags = [cat, library, books]
+<span class="hd">IMG-045</span>: tags = [sunset, beach, ocean]</pre>
+  <h3>Co-ocurrencia</h3>
+  <pre><span class="hl">cat</span> ↔ <span class="hl">sunset</span>:     aparecen juntos en 1 imagen (IMG-001)
+<span class="hl">cat</span> ↔ <span class="hl">cyberpunk</span>:  aparecen juntos en 1 imagen (IMG-009)
+<span class="hl">cat</span> ↔ <span class="hl">library</span>:    aparecen juntos en 1 imagen (IMG-030)
+<span class="hl">sunset</span> ↔ <span class="hl">beach</span>:     aparecen juntos en 1 imagen (IMG-045)</pre>
+</section>
+
+<!-- ============================== S25 RELATED SIMILARITY ============================== -->
+<section class="slide">
+  <h2>Co-ocurrencia → "relacionadas" <span class="tag">08</span></h2>
+  <p>Haces click en <strong>"Ver relacionadas"</strong> de IMG-001:</p>
+  <ol>
+    <li>Busca <strong>vecinos directos</strong> en el grafo (tags, style, mood…)</li>
+    <li>Cuenta <strong>cuántos vecinos comparten</strong> con otras imágenes</li>
+    <li>Calcula <strong>Jaccard similarity</strong> (una fórmula matemática)</li>
+    <li>Suma <strong>bonus</strong> por co-ocurrencia fuerte</li>
+  </ol>
+  <pre>
+<span class="hd">IMG-001</span> vecinos: {cat, sunset, nature, Photorealistic, Calm}
+
+<span class="hd">IMG-009</span> vecinos: {cat, cyberpunk, neon, 3D Render, Vibrant}
+  Vecinos compartidos: {cat}
+  <span class="hl">Jaccard = 1/9 = 0.11</span>
+
+<span class="hd">IMG-045</span> vecinos: {sunset, beach, ocean, Photorealistic, Calm}
+  Vecinos compartidos: {sunset, Photorealistic, Calm}
+  <span class="hl">Jaccard = 3/7 = 0.43</span>  <span class="arrow">← ¡Más parecida!</span></pre>
+  <p><strong>Resultado:</strong> IMG-045 aparece como <em>"más relacionada"</em> que IMG-009.</p>
+</section>
+
+<!-- ============================== S26 COMPARACION ============================== -->
+<section class="slide">
+  <h2>Comparación con algoritmos estándar <span class="tag">09</span></h2>
+  <table>
+    <thead><tr><th>Concepto</th><th>VORAEL (nuestro)</th><th>Google/Elasticsearch</th></tr></thead>
+    <tbody>
+      <tr><td>Algoritmo</td><td>Token-Match + Co-ocurrencia</td><td>BM25 + Inverted Index</td></tr>
+      <tr><td>Búsqueda de texto</td><td>Palabra completa, scoring fijo</td><td>TF-IDF, scoring dinámico</td></tr>
+      <tr><td>Relacionadas</td><td>Jaccard + co-ocurrencia</td><td>Collaborative filtering + embeddings</td></tr>
+      <tr><td>Velocidad</td><td><span class="hl">~1ms</span> (en memoria)</td><td>~10ms (inverted index)</td></tr>
+      <tr><td>Complejidad</td><td>Baja (200 líneas)</td><td>Alta (miles de líneas)</td></tr>
+      <tr><td>Para cuántos docs</td><td>30 – 10,000</td><td>1,000 – 1,000,000,000</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== S27 BM25 ============================== -->
+<section class="slide">
+  <h2>¿Por qué no usamos BM25 completo? <span class="tag">09</span></h2>
+  <p><strong>BM25</strong> (Best Matching 25) es el algoritmo de Google y Elasticsearch. Es más preciso pero más complejo:</p>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>BM25 pondera</h4>
+      <ul>
+        <li>Frecuencia del término en el doc (TF)</li>
+        <li>Rareza del término en la colección (IDF)</li>
+        <li>Longitud del documento</li>
+        <li>Parámetros ajustables (k1, b)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Nuestro sistema pondera</h4>
+      <ul>
+        <li>Tags: <span class="flag orange">+3</span></li>
+        <li>Subject: <span class="flag blue">+2</span></li>
+        <li>Prompts: <span class="flag cyan">+1</span></li>
+      </ul>
+    </div>
+  </div>
+  <blockquote><p><strong>¿Por qué no lo usamos?</strong> Para 30–1000 imágenes la diferencia es mínima. BM25 brilla con <em>millones</em> de documentos.</p></blockquote>
+</section>
+
+<!-- ============================== S28 EMBEDDINGS ============================== -->
+<section class="slide">
+  <h2>Embeddings semánticos <span class="tag">09</span></h2>
+  <p>Los embeddings son la <strong>evolución natural</strong> de este sistema.</p>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>Token-Match (actual)</h4>
+      <pre style="margin:.5em 0">
+"gato"  = "gato"   <span class="hc">[SÍ]</span>
+"felino" = "gato"  <span class="hc">[NO]</span> (no sabe que son lo mismo)</pre>
+    </div>
+    <div class="card">
+      <h4>Embeddings semánticos</h4>
+      <pre style="margin:.5em 0">
+"gato"   = [0.23, -0.45, ...]
+"felino" = [0.21, -0.42, ...]  <span class="hl">(muy parecido!)</span>
+Similitud: 0.94 → ¡son lo mismo!</pre>
+    </div>
+  </div>
+  <blockquote><p><strong>¿Para cuándo?</strong> Cuando tengas <strong>&gt; 1000 imágenes</strong> y quieras buscar por significado, no solo por palabras.</p></blockquote>
+</section>
+
+<!-- ============================== S29 RESUMEN ALGO ============================== -->
+<section class="slide">
+  <h2>Resumen del algoritmo <span class="tag">09</span></h2>
+  <div class="diagram">
+    <div class="row"><span class="flag blue">1</span><span>Tokenizar</span><span class="arrow">─►</span><span class="hc">gato atardecer → gato, atardecer</span></div>
+    <div class="row"><span class="flag blue">2</span><span>Token-Match</span><span class="arrow">─►</span><span class="hc">palabra completa</span></div>
+    <div class="row"><span class="flag orange">3</span><span>Scoring</span><span class="arrow">─►</span><span class="hc">tags ×3 + subject ×2 + prompts ×1</span></div>
+    <div class="row"><span class="flag orange">4</span><span>Ordenar</span><span class="arrow">─►</span><span class="hc">mayor puntaje primero</span></div>
+    <div class="row"><span class="flag purple">5</span><span>Co-ocurrencia</span><span class="arrow">─►</span><span class="hc">tags que aparecen juntos</span></div>
+    <div class="row"><span class="flag purple">6</span><span>Jaccard</span><span class="arrow">─►</span><span class="hc">similitud entre conjuntos</span></div>
+    <div class="row"><span class="flag green">✓</span><span class="hl">Resultado: imágenes ordenadas por relevancia</span></div>
+  </div>
+</section>
+
+<!-- ============================== S30 ENV ============================== -->
+<section class="slide">
+  <h2>Variables de entorno <span class="tag">10</span></h2>
+  <p>Son como los <strong>interruptores de luz</strong> del sistema. Pueden encender o apagar cosas.</p>
+  <h3>Variables principales</h3>
+  <table>
+    <thead><tr><th>Variable</th><th>Qué controla</th><th>Valor normal</th><th>Valor de prueba</th></tr></thead>
+    <tbody>
+      <tr><td>DB_MOCK</td><td>¿Usar base de datos real?</td><td>false</td><td>true (datos inventados)</td></tr>
+      <tr><td>SEARCH_ENGINE</td><td>Motor de búsqueda</td><td>graph</td><td>sql (fallback)</td></tr>
+      <tr><td>METADATA_EMBED</td><td>¿Incrustar metadatos?</td><td>exiftool</td><td>none</td></tr>
+      <tr><td>ALLOW_BACKFILL_WRITE</td><td>¿Permitir escribir en S3?</td><td>false</td><td>true</td></tr>
+      <tr><td>GRAPH_REFRESH_MS</td><td>Refresco del grafo</td><td>60000 (1 min)</td><td>60000</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== S31 MODO MOCK ============================== -->
+<section class="slide">
+  <h2>Modo mock (pruebas) <span class="tag">10</span></h2>
+  <p><span class="flag info">DB_MOCK=true</span></p>
+  <div class="card">
+    <ul>
+      <li><span class="flag warn">i</span> No necesita PostgreSQL</li>
+      <li><span class="flag warn">i</span> No necesita DigitalOcean Spaces</li>
+      <li><span class="flag yes">✓</span> Usa 30 imágenes inventadas en <span class="hl">mockData.ts</span></li>
+      <li><span class="flag yes">✓</span> Usa 10 archivos placeholder en <span class="hl">test-images/</span></li>
+      <li><span class="flag yes">✓</span> Todo funciona: búsqueda, filtros, descarga, grafo</li>
+    </ul>
+  </div>
+  <blockquote><p><strong>¿Para qué sirve?</strong> Desarrollar y probar sin tener acceso al servidor real.</p></blockquote>
+</section>
+
+<!-- ============================== S32 ENDPOINTS ============================== -->
+<section class="slide">
+  <h2>Endpoints del API <span class="tag">11</span></h2>
+  <p>Un <strong>endpoint</strong> es una dirección web que el frontend visita para obtener datos.</p>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Qué devuelve</th><th>Ejemplo de uso</th></tr></thead>
+    <tbody>
+      <tr><td>GET /api/health</td><td>Estado del sistema</td><td>{"ok": true, "ts": "2026-..."}</td></tr>
+      <tr><td>GET /api/images</td><td>Lista paginada</td><td>Galería principal</td></tr>
+      <tr><td>GET /api/images/:id</td><td>Una imagen</td><td>Detalle de imagen</td></tr>
+      <tr><td>GET /api/images/:id/download</td><td>Archivo</td><td>Botón de descarga</td></tr>
+      <tr><td>GET /api/images/:id/related</td><td>Similares</td><td>"Ver relacionadas"</td></tr>
+      <tr><td>GET /api/search?q=gato</td><td>Resultados</td><td>Buscador</td></tr>
+      <tr><td>GET /api/tags</td><td>Tags con conteo</td><td>Página de tags</td></tr>
+      <tr><td>GET /api/filters</td><td>Estilos, moods, usos</td><td>Panel de filtros</td></tr>
+      <tr><td>GET /api/stats</td><td>Estadísticas</td><td>Página de stats</td></tr>
+      <tr><td>GET /api/graph</td><td>Grafo</td><td>Página de red</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== S33 EJEMPLO RESP ============================== -->
+<section class="slide">
+  <h2>Ejemplo de respuesta <span class="tag">11</span></h2>
+  <p><strong>GET /api/images?limit=2</strong></p>
+  <pre>{
+  <span class="hk">"items"</span>: [
+    {
+      <span class="hk">"id"</span>: <span class="hs">"img-030"</span>,
+      <span class="hk">"s3_url"</span>: <span class="hs">"https://n8ns3.sfo3.../img-030.webp"</span>,
+      <span class="hk">"subject"</span>: <span class="hs">"Cat in library"</span>,
+      <span class="hk">"tags"</span>: [<span class="hs">"cat"</span>, <span class="hs">"library"</span>, <span class="hs">"books"</span>, <span class="hs">"cozy"</span>],
+      <span class="hk">"style"</span>: <span class="hs">"Oil Painting"</span>,
+      <span class="hk">"mood"</span>: <span class="hs">"Calm"</span>,
+      <span class="hk">"created_at"</span>: <span class="hs">"2026-01-15T10:30:00Z"</span>
+    },
+    {
+      <span class="hk">"id"</span>: <span class="hs">"img-029"</span>,
+      <span class="hk">"s3_url"</span>: <span class="hs">"https://n8ns3.sfo3.../img-029.webp"</span>,
+      <span class="hk">"subject"</span>: <span class="hs">"Cyberpunk cat"</span>,
+      <span class="hk">"tags"</span>: [<span class="hs">"cat"</span>, <span class="hs">"cyberpunk"</span>, <span class="hs">"neon"</span>],
+      <span class="hk">"style"</span>: <span class="hs">"3D Render"</span>,
+      <span class="hk">"mood"</span>: <span class="hs">"Vibrant"</span>,
+      <span class="hk">"created_at"</span>: <span class="hs">"2026-01-14T08:15:00Z"</span>
+    }
+  ],
+  <span class="hk">"page"</span>: <span class="hn">1</span>, <span class="hk">"limit"</span>: <span class="hn">2</span>,
+  <span class="hk">"total"</span>: <span class="hn">30</span>, <span class="hk">"hasMore"</span>: <span class="hk">true</span>
+}</pre>
+</section>
+
+<!-- ============================== S34 SIMULACION ============================== -->
+<section class="slide">
+  <h2>Simulación con datos reales <span class="tag">12</span></h2>
+  <p>Para probar el sistema completo con imágenes reales <em>sin afectar S3</em>, se implementó una <strong>Simulación Local</strong>.</p>
+  <ol>
+    <li><span class="flag info">1</span> Se instaló la dependencia nativa <span class="hl">libimage-exiftool-perl</span></li>
+    <li><span class="flag info">2</span> Script <span class="hl">simulate-local.ts</span> descarga hasta 30 imágenes (solo lectura) del S3 de producción</li>
+    <li><span class="flag info">3</span> Inyecta los metadatos de <span class="hl">mockData.ts</span> en el binario (namespace XMP-vorael)</li>
+    <li><span class="flag info">4</span> Guarda en <span class="hl">test-images-real/</span> y el API lo sirve estáticamente</li>
+    <li><span class="flag info">5</span> Actualiza PostgreSQL apuntando a URLs locales</li>
+  </ol>
+  <h3>¿Por qué el grafo dibuja estas imágenes?</h3>
+  <blockquote><p>Con <strong>DB_MOCK=false</strong> se lee de PostgreSQL. La tabla actualizada hace que el auto-refresco (cada 60s) reconstruya el grafo con Graphology, y el frontend (React/Sigma.js) dibuja la red con tus <strong>fotos reales</strong>.</p></blockquote>
+</section>
+
+<!-- ============================== S35 SCRIPTS ============================== -->
+<section class="slide">
+  <h2>Scripts útiles <span class="tag">13</span></h2>
+  <table>
+    <thead><tr><th>Comando</th><th>¿Qué hace?</th><th>¿Cuándo usarlo?</th></tr></thead>
+    <tbody>
+      <tr><td>pnpm dev</td><td>Arranca API + web en desarrollo</td><td>Cuando estás programando</td></tr>
+      <tr><td>pnpm test</td><td>Ejecuta los 98 tests</td><td>Para verificar que todo funciona</td></tr>
+      <tr><td>pnpm build</td><td>Compila para producción</td><td>Antes de subir al servidor</td></tr>
+      <tr><td>pnpm export-portable</td><td>Exporta imágenes con metadatos a carpeta local</td><td>Para tener copia local</td></tr>
+      <tr><td>pnpm backfill</td><td>Reescribe imágenes en S3 con metadatos</td><td>Para actualizar el S3 completo</td></tr>
+      <tr><td>pnpm scan</td><td>Reconstruye el grafo desde archivos</td><td>Si se pierde la DB</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== S36 FAQ ============================== -->
+<section class="slide">
+  <h2>Preguntas frecuentes (FAQ) <span class="tag">14</span></h2>
+  <div class="grid cols-2">
+    <div class="card"><h4>¿Por qué 98 tests?</h4><p>Son un <strong>seguro de vida</strong>. Cada cambio verifica que nada se rompió. Si falla uno, sabemos exactamente qué se rompió.</p></div>
+    <div class="card"><h4>¿Por qué refresco cada 60s?</h4><p>Si fuera en cada petición sería lento. Lo mantenemos en memoria y lo actualizamos periódicamente. Como un <em>mapa impreso</em> en vez de dibujarlo a cada paso.</p></div>
+    <div class="card"><h4>¿Si PostgreSQL se cae?</h4><p>Sigue funcionando con el último grafo en memoria. Al volver, el próximo refresh lo actualiza. Como un <em>avión con motor de repuesto</em>.</p></div>
+    <div class="card"><h4>¿Por qué CommonJS?</h4><p>El API usa CommonJS porque <strong>sharp</strong> y otras dependencias nativas funcionan mejor. El frontend sí usa ES Modules (Vite).</p></div>
+    <div class="card"><h4>¿Qué es "atomic swap"?</h4><p>No se modifica el grafo viejo. Se construye uno nuevo completo y se <strong>reemplaza de golpe</strong>. Nunca se ve un grafo a medias.</p></div>
+    <div class="card"><h4>¿Por qué no cambiar /vorael/?</h4><p>Está hardcodeada en <strong>4 lugares</strong>: vite.config, main.tsx, nginx.conf, index.html. Si cambia uno y no los otros, todo se rompe.</p></div>
+  </div>
+</section>
+
+<!-- ============================== S37 RESUMEN EJECUTIVO ============================== -->
+<section class="slide">
+  <h2>Resumen ejecutivo <span class="tag">15</span></h2>
+  <h3>¿Qué construimos?</h3>
+  <p>Un <strong>sistema completo</strong> para mostrar, buscar y descargar imágenes generadas por IA:</p>
+  <ol>
+    <li>Galería visual con filtros infinitos</li>
+    <li>Búsqueda inteligente que entiende tags, estilos y moods</li>
+    <li>Descarga con metadatos incrustados en cada imagen</li>
+    <li>Grafo interactivo que muestra relaciones</li>
+    <li><strong>98 tests</strong> que garantizan que todo funciona</li>
+  </ol>
+  <h3>¿Qué tecnologías usamos?</h3>
+  <ul>
+    <li>Frontend: <strong>React + Vite + Tailwind + Sigma.js</strong></li>
+    <li>Backend: <strong>Express + TypeScript + PostgreSQL</strong></li>
+    <li>Almacenamiento: <strong>DigitalOcean Spaces (S3)</strong></li>
+    <li>Procesamiento: <strong>Sharp</strong> + <strong>ExifTool</strong></li>
+    <li>Motor de grafos: <strong>Graphology</strong></li>
+  </ul>
+</section>
+
+<!-- ============================== S38 PRODUCCION ============================== -->
+<section class="slide">
+  <h2>¿Qué falta para producción? <span class="tag">15</span></h2>
+  <div class="diagram">
+    <div class="row"><span class="flag warn">1</span><span><strong>S3 write permissions</strong></span><span class="arrow">— confirmar que el API puede escribir en Spaces</span></div>
+    <div class="row"><span class="flag warn">2</span><span><strong>ExifTool en servidor</strong></span><span class="arrow">— instalarlo en el VPS de producción</span></div>
+    <div class="row"><span class="flag warn">3</span><span><strong>Pruebas end-to-end</strong></span><span class="arrow">— verificar en el servidor real</span></div>
+  </div>
+  <h3>¿Cuánto tarda en cargarse?</h3>
+  <table>
+    <thead><tr><th>Acción</th><th>Tiempo</th></tr></thead>
+    <tbody>
+      <tr><td>Galería</td><td>&lt; 1 segundo (datos en caché)</td></tr>
+      <tr><td>Búsqueda</td><td>&lt; 100ms (grafo en memoria)</td></tr>
+      <tr><td>Descarga</td><td>1–3 segundos (convierte + incrusta metadatos)</td></tr>
+      <tr><td>Grafo</td><td>&lt; 2 segundos (layout force-directed en cliente)</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== S39 FINAL ============================== -->
+<section class="slide center">
+  <div class="big-emoji">~</div>
+  <h1>Gracias<span class="caret"></span></h1>
+  <div class="prompt"><b>$</b> VORAEL — banco de imágenes generadas por IA</div>
+  <p>Corporación Universitaria Americana<br>
+  <a href="https://n8n.americana.edu.co/vorael/" style="color:var(--cyan)">https://n8n.americana.edu.co/vorael/</a></p>
+  <div class="hr"></div>
+  <p style="font-size:.95rem; color:var(--comment)">Documento preparado para la reunión · VORAEL</p>
+  <p style="font-size:.85rem; color:var(--comment)">navega con <span class="kbd">←</span> <span class="kbd">→</span> · <span class="kbd">j/k</span> · <span class="kbd">space</span> · <span class="kbd">Home/End</span></p>
+</section>
+</div>
+
+<div id="progress"></div>
+<div id="bar">
+  <span><span class="mode">-- NORMAL --</span></span>
+  <span class="nav">
+    <span class="kbd">←/h</span> <span class="kbd">→/l</span> <span class="kbd">space</span> navegar
+    <span class="kbd">f</span> fullscreen
+  </span>
+  <span class="count">slide <b id="cur">1</b> / <span id="tot">1</span></span>
+</div>
+
+<script>
+const slides = Array.from(document.querySelectorAll('.slide'));
+const total = slides.length;
+document.getElementById('tot').textContent = total;
+let cur = 0;
+
+function clamp(n){ return Math.max(0, Math.min(total-1, n)); }
+function go(n, dir){
+  const old = cur;
+  cur = clamp(n);
+  if(cur === old) return;
+  slides[old].classList.remove('active');
+  slides[cur].classList.add('active');
+  slides[cur].classList.toggle('from-left', dir===-1);
+  slides[cur].classList.toggle('from-right', dir===1);
+  document.getElementById('cur').textContent = cur+1;
+  document.getElementById('progress').style.width = ((cur+1)/total*100)+'%';
+  slides[cur].scrollTop = 0;
+}
+document.getElementById('progress').style.width = ((cur+1)/total*100)+'%';
+
+window.addEventListener('keydown', (e)=>{
+  switch(e.key){
+    case 'ArrowRight': case 'l': case ' ': case 'PageDown': case 'j':
+      e.preventDefault(); go(cur+1, 1); break;
+    case 'ArrowLeft': case 'h': case 'PageUp': case 'k':
+      e.preventDefault(); go(cur-1, -1); break;
+    case 'Home': e.preventDefault(); go(0, -1); break;
+    case 'End': e.preventDefault(); go(total-1, 1); break;
+    case 'f': case 'F':
+      if(!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+      break;
+  }
+  // ignore when typing in an input
+});
+// scrollable slides: wheel still works natively
+
+// counter re-render on bar
+</script>
+</body>
+</html>
