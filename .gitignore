@@ -38,3 +38,6 @@ apps/web/vite.config.d.ts
 
 # Real images downloaded from S3 (~45MB, not tracked)
 apps/api/test-images-real/
+
+# SSH public key for the vorael tunnel (do NOT push)
+llave-tunel-9913.md

@@ -147,3 +147,38 @@ describe('search', () => {
     expect(lower.total).toBe(mixed.total);
   });
 });
+
+describe('search coverage (paragraphs)', () => {
+  it('ranks paragraphs by coverage: only the image matching most terms ranks first', () => {
+    // Párrafo construido íntegramente desde el enhanced_prompt de sampleRows[0].
+    const result = search(snap, 'a fluffy cat sitting on a sunny windowsill');
+    expect(result.total).toBeGreaterThanOrEqual(1);
+    expect(result.items[0].id).toBe(sampleRows[0].id);
+  });
+
+  it('filters out images that only share a single word of a long paragraph', () => {
+    // Imágenes que solo comparten una palabra ('a', 'on') deben quedar fuera.
+    const result = search(snap, 'a fluffy cat sitting on a sunny windowsill');
+    const ids = result.items.map((r) => r.id);
+    expect(ids).not.toContain('tok-02'); // solo comparte "a"
+    expect(ids).not.toContain('tok-03');
+  });
+
+  it('returns fewer results for a long paragraph than for its keywords alone', () => {
+    const paragraph = search(snap, 'cat windowsill sunny fluffy sitting');
+    const word = search(snap, 'cat');
+    expect(paragraph.total).toBeLessThanOrEqual(word.total);
+  });
+
+  it('returns 0 for a paragraph that matches nothing', () => {
+    const result = search(snap, 'un gato durmiendo sobre libros viejos');
+    expect(result.total).toBe(0);
+  });
+
+  it('keeps any-match behavior for short queries (<= 3 terms)', () => {
+    // 'cat' tag solo → cuenta aunque el resto del término no exista.
+    const result = search(snap, 'cat windowsill spaceship');
+    expect(result.total).toBeGreaterThanOrEqual(1);
+    expect(result.items.every((r) => r.tags?.includes('cat'))).toBe(true);
+  });
+});

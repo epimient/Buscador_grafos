@@ -251,15 +251,16 @@ Cuando arranca el API, lee todas las imágenes de PostgreSQL y crea:
 
 Cuando buscas "cat sunset", el sistema:
 
-1. Tokeniza: `["cat", "sunset"]`
-2. Para cada imagen, verifica:
-   - ¿Tiene el tag "cat"? → +3 puntos
-   - ¿Tiene el tag "sunset"? → +3 puntos
-   - ¿"cat" aparece en el subject? → +2 puntos
-   - ¿"sunset" aparece en el subject? → +2 puntos
-   - ¿Aparece en los prompts? → +1 punto cada vez
-3. Ordena por puntaje total
-4. Devuelve las más relevantes
+1. **Tokeniza y deduplica**: `["cat", "sunset"]` (términos únicos, en minúsculas)
+2. Para cada imagen calcula un **score por término** que coincide:
+   - ¿Aparece como **tag**? → +4 puntos (peso alto)
+   - ¿Aparece como palabra en el **subject**? → +2 puntos
+   - ¿Aparece como palabra en el **prompt original o mejorado**? → +1 punto cada uno
+3. **Filtro de cobertura** (para párrafos):
+   - Queries de 1-3 términos: basta que **uno** coincida (comporta OR)
+   - Queries largas: se exige que coincida **≥ 50%** de los términos únicos
+4. **Ordena** por puntaje DESC (empate: fecha DESC, id DESC)
+5. Devuelve las más relevantes
 
 ### ¿Qué es "related" (imágenes relacionadas)?
 
@@ -346,51 +347,71 @@ Cada palabra debe aparecer como **palabra completa**, no como parte de otra pala
 
 ### Paso 3: Calcular el puntaje (Scoring)
 
-No todas las coincidencias valen lo mismo. Una imagen que tiene "gato" como **tag** es más relevante que una donde "gato" aparece solo en la descripción larga.
+No todas las coincidencias valen lo mismo. El puntaje se calcula **por término**: cada palabra de tu búsqueda que coincide suma puntos según dónde aparezca.
 
 ```mermaid
 flowchart LR
-    subgraph SISTEMA["SISTEMA DE PUNTAJE"]
-        T["Tag coincide"] -->|+3 puntos| TOTAL["Total = suma"]
-        S["Subject contiene"] -->|+2 puntos| TOTAL
-        P["Prompt contiene"] -->|+1 punto| TOTAL
+    subgraph PORTERMINO["POR CADA TÉRMINO DE LA QUERY"]
+        T["Coincide como TAG"] -->|+4 puntos| TOTAL["Total = suma"]
+        S["Coincide como palabra en SUBJECT"] -->|+2 puntos| TOTAL
+        P["Coincide como palabra en PROMPT"] -->|+1 punto| TOTAL
     end
 ```
 
-**Ejemplo real:**
+**Ejemplo real** (query "cat sunset"):
 
 ```
-Query: "gato atardecer"
+Query: "cat sunset"
 
-Imagen 1: tags=[cat, sunset, nature], subject="Gato al atardecer"
-  → tag "cat" coincide: +3
-  → tag "sunset" coincide: +3
-  → subject contiene "gato": +2
-  → subject contiene "atardecer": +2
-  → TOTAL: 10 puntos [TOP]
+Imagen 1: tags=[cat, sunset, nature], subject="Cat at sunset"
+  → "cat" coincide en tag: +4
+  → "sunset" coincide en tag: +4
+  → "cat" en subject: +2
+  → "sunset" en subject: +2
+  → TOTAL: 12 puntos [TOP]
 
-Imagen 2: tags=[cat, library], subject="Gato en biblioteca"
-  → tag "cat" coincide: +3
-  → tag "sunset" NO coincide: +0
-  → subject contiene "gato": +2
-  → subject contiene "atardecer": +0
-  → TOTAL: 5 puntos
+Imagen 2: tags=[cat, library], subject="Cat in library"
+  → "cat" coincide en tag: +4
+  → "sunset" NO coincide: +0
+  → TOTAL: 4 puntos
 
-Imagen 3: tags=[dog, park], subject="Perro en parque"
-  → tag "cat" NO coincide: +0
-  → tag "sunset" NO coincide: +0
-  → subject contiene "gato": +0
-  → subject contiene "atardecer": +0
+Imagen 3: tags=[dog, park], subject="Dog in park"
+  → "cat" NO coincide: +0
+  → "sunset" NO coincide: +0
   → TOTAL: 0 puntos
 ```
 
-### Paso 4: Ordenar y devolver
+### Paso 4: Filtro de cobertura (para párrafos)
+
+Aquí está la clave de la búsqueda "tipo párrafo". VORAEL cuenta **cuántos términos únicos** de tu consulta coincidieron en cada imagen:
+
+```
+"cat sunset"        → 2 términos únicos
+"a cat sleeping on  → 9 términos únicos
+ old books in a
+ grand library"
+```
+
+- **Queries cortas (1-3 términos):** basta que **un** término coincida. Esto mantiene el comportamiento OR de siempre: buscar "cat spaceship" devuelve las imágenes con tag "cat" aunque "spaceship" no exista.
+- **Párrafos (4+ términos):** se exige que coincidan **al menos el 50%** de los términos únicos. Si escribes un párrafo de 14 palabras, solo aparecen imágenes que coincidan con 7 o más.
+
+```
+Párrafo: "a cat sleeping on old books in a grand library with golden light"
+
+Imagen A: coincide con "a", "cat", "sleeping", "on", "old", "books",
+          "in", "grand", "library" → 9/9 términos → 100% → APARECE
+Imagen B: solo comparte "a" → 1/9 → 11% → NO aparece
+```
+
+Este filtro elimina el "ruido": antes un párrafo devolvía 157 imágenes (cualquiera que compartiera una palabra); ahora solo vuelven las realmente relevantes.
+
+### Paso 5: Ordenar y devolver
 
 Las imágenes se ordenan por puntaje (mayor a menor) y se devuelven las mejores.
 
 ```
-1. Imagen 1 (10 pts) → ¡la más relevante!
-2. Imagen 2 (5 pts)
+1. Imagen 1 (12 pts) → ¡la más relevante!
+2. Imagen 2 (4 pts)
 3. Imagen 3 (0 pts) → no aparece en resultados
 ```
 
@@ -507,15 +528,16 @@ Embeddings semánticos:
 
 ```mermaid
 flowchart TD
-    A["1. Tokenizar: gato atardecer -> gato, atardecer"] --> B["2. Token-Match: palabra completa"]
-    B --> C["3. Scoring: tags x3 + subject x2 + prompts x1"]
-    C --> D["4. Ordenar: mayor puntaje primero"]
-    D --> E["5. Co-ocurrencia: tags que aparecen juntos"]
-    E --> F["6. Jaccard: calcular similitud entre conjuntos"]
-    F --> G["Resultado: imagenes ordenadas por relevancia"]
+    A["1. Tokenizar y deduplicar: 'gato atardecer' -> gato, atardecer"] --> B["2. Token-Match: palabra completa"]
+    B --> C["3. Scoring por término: tags x4 + subject x2 + prompts x1"]
+    C --> D["4. Filtro de cobertura: >= 50% en párrafos, OR en queries cortas"]
+    D --> E["5. Ordenar: score DESC, fecha DESC"]
+    E --> F["6. Co-ocurrencia: tags que aparecen juntos"]
+    F --> G["7. Jaccard: calcular similitud entre conjuntos"]
+    G --> H["Resultado: imagenes ordenadas por relevancia"]
 ```
 
-**En una frase:** VORAEL busca por palabras completas, las pondera por importancia, y usa co-ocurrencia para encontrar imágenes similares. Es como un mini-Google pero optimizado para un catálogo de imágenes.
+**En una frase:** VORAEL busca palabra por palabra (con plural mínimo y acentos normalizados), pondera donde aparece cada término (tags > subject > prompts), exige cobertura mínima en párrafos para no devolver ruido, y usa co-ocurrencia para encontrar imágenes similares. Es como un mini-Google pero optimizado para un catálogo de imágenes.
 
 ---
 
@@ -618,24 +640,59 @@ Con `DB_MOCK=false`, el motor de la aplicación **lee obligatoriamente de Postgr
 
 ---
 
+## Dataset sintético (para probar búsquedas complejas)
+
+Con solo 30 imagenes, las búsquedas y el grafo quedan cortos. Por eso existe un **generador de dataset sintético** que siembra 1000 filas de metadata rica y variada.
+
+### ¿Qué genera?
+
+Un motor determinista (`apps/api/src/seed/engine.ts`) combina **80 subjects** × **12 estilos** × **12 moods** × **8 casos de uso**:
+
+- Prompts en inglés tipo "a cat curled up sleeping on old books in a grand library" (frases completas, ideales para el buscador)
+- 3-8 tags por imagen (co-ocurrencia rica: gatos+biblioteca, robots+neon, etc.)
+- Paletas de color por mood
+- Ids `gen-0001`... que no colisionan con los datos reales
+
+Es **determinista**: con la misma semilla genera exactamente el mismo dataset (ideal para tests y repetibilidad).
+
+### ¿Cómo se usa?
+
+```bash
+DB_MOCK=false pnpm seed:generate            # siembra 1000 filas
+DB_MOCK=false pnpm seed:generate:clear      # borra las gen-* y re-siembra
+GEN_COUNT=5000 pnpm seed:generate           # volumen configurable
+GEN_SEED=7 pnpm seed:generate               # otra variación del dataset
+```
+
+Las imágenes `s3_url` reutilizan cíclicamente los 30 archivos reales de `test-images-real/`; solo la metadata varía. El grafo la toma en menos de 60s (o reiniciando el API).
+
+---
+
 ## Scripts útiles
 
 | Comando | ¿Qué hace? | ¿Cuándo usarlo? |
 |---|---|---|
 | `pnpm dev` | Arranca API + web en desarrollo | Cuando estás programando |
-| `pnpm test` | Ejecuta los 98 tests | Para verificar que todo funciona |
+| `pnpm test` | Ejecuta los 110 tests | Para verificar que todo funciona |
 | `pnpm build` | Compila para producción | Antes de subir al servidor |
 | `pnpm export-portable` | Exporta imágenes con metadatos a carpeta local | Para tener copia local |
 | `pnpm backfill` | Reescribe imágenes en S3 con metadatos | Para actualizar el S3 completo |
 | `pnpm scan` | Reconstruye el grafo desde archivos | Si se pierde la DB |
+| `pnpm seed:db` | Siembra las 30 imágenes de `mockData.ts` | Para resetear la BD local |
+| `pnpm seed:generate` | Genera y siembra 1000 imágenes sintéticas | Para probar búsquedas complejas |
+| `pnpm seed:generate:clear` | Borra las `gen-*` y re-siembra | Para regenerar el dataset |
 
 ---
 
 ## Preguntas frecuentes (FAQ)
 
-### ¿Por qué hay 98 tests?
+### ¿Por qué hay 110 tests?
 
-Los tests son como un **seguro de vida**. Cada vez que alguien cambia el código, los tests verifican que nada se rompió. Si un test falla, sabemos exactamente qué se rompió.
+Los tests son como un **seguro de vida**. Cada vez que alguien cambia el código, los tests verifican que nada se rompió. Si un test falla, sabemos exactamente qué se rompió. Incluyen 7 tests del generador de dataset sintético y 5 tests de cobertura (búsqueda de párrafos).
+
+### ¿Puedo buscar un párrafo completo?
+
+Sí, en inglés. El buscador separa tu texto en palabras y exige que la imagen coincida con al menos el 50% de ellas (en queries de 4+ términos). Un párrafo en español no dará resultados porque los datos están en inglés; prueba con palabras clave sueltas o frases cortas.
 
 ### ¿Por qué el grafo se refresca cada 60 segundos?
 
@@ -643,7 +700,7 @@ Porque si lo hiciéramos en cada petición, sería lento. En cambio, lo mantenem
 
 ### ¿Qué pasa si PostgreSQL se cae?
 
-El sistema sigue funcionando con el último grafo que tenía en memoria. Cuando PostgreSQL vuelva, el próximo refresh lo actualizará. Es como un avión con motor de repuesto.
+El sistema sigue funcionando con el último grafo que tenía en memoria. El timer de refresh **siempre está activo** (aunque la carga inicial haya fallado), así que cuando PostgreSQL vuelva, el próximo ciclo lo actualiza solo. Es como un avión con motor de repuesto.
 
 ### ¿Por qué se usa CommonJS y no ES Modules?
 

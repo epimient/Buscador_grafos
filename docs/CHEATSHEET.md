@@ -52,13 +52,16 @@ flowchart TD
     B --> C[graph.ts]
     C --> D{SEARCH_ENGINE?}
     D -->|graph| E[grafo in-memory Graphology]
-    E --> E1[tokenize query]
-    E1 --> E2[token-match contra subject/prompt/tags]
-    E2 --> E3["scoring: tagsx3, subjectx2, promptsx1"]
-    E3 --> E4[ordenar score DESC, created_at DESC, id DESC]
+    E --> E1["tokenize + dedupe términos"]
+    E1 --> E2["token-match palabra completa online tags/subject/prompt"]
+    E2 --> E3["scoring por término: tags x4, subject x2, prompts x1"]
+    E3 --> E4["filtro cobertura: >=50% en párrafos, OR si <=3 términos"]
+    E4 --> E5["ordenar score DESC, created_at DESC, id DESC"]
     D -->|sql| F[fallback PostgreSQL]
     F --> F1["ILIKE, UNNEST tags, cardinality INTERSECT"]
 ```
+
+> **Cómo busca**: cada palabra vale puntos según donde aparezca (tag +4, subject +2, prompt +1). Un término puede coincidir en varios campos y cuenta como un match. En queries de 1-3 términos basta un match (OR); en párrafos se exige ≥50% de los términos únicos.
 
 ## Flujo de descarga con metadatos
 

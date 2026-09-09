@@ -325,9 +325,17 @@ export interface SearchResult {
 }
 
 /**
- * Búsqueda por token-match: cada término de la query debe aparecer como palabra
- * completa (con plural mínimo) en subject, original_prompt o enhanced_prompt,
- * O como tag exacto. Puntaje replicado: tags×3, subject+2, prompts+1.
+ * Búsqueda por token-match con ranking por cobertura.
+ *
+ * Cada término de la query se compara como palabra completa (con plural mínimo)
+ * contra tags, subject, original_prompt y enhanced_prompt. El score suma por
+ * término encontrado (tags tienen más peso que el texto) y el resultado se
+ * ordena por score DESC.
+ *
+ * Para queries cortas (1-3 términos) basta con que UN término coincida (comporta
+ * OR, como el SQL original). Para párrafos/queries largas se exige un porcentaje
+ * mínimo de términos coincidentes (coverage), de modo que solo vuelven imágenes
+ * realmente relevantes y no cualquier imagen que comparta una palabra suelta.
  */
 export function search(
   snap: GraphSnapshot,
@@ -342,52 +350,52 @@ export function search(
     return { items: [], total: 0, page, limit, hasMore: false };
   }
 
-  const terms = q
-    .toLowerCase()
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length > 0);
+  // Términos únicos (en minúsculas), para que una palabra repetida no domine.
+  const terms = [
+    ...new Set(
+      q
+        .toLowerCase()
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0),
+    ),
+  ];
 
-  // Calcular score para cada imagen.
-  const scored: { id: string; score: number }[] = [];
+  // Cobertura mínima: queries cortas → cualquier match; párrafos → ≥ 50%.
+  const minMatched = terms.length <= 3 ? 1 : Math.ceil(terms.length * 0.5);
+
+  // Calcular score por cobertura para cada imagen.
+  const scored: { id: string; score: number; matched: number }[] = [];
 
   for (const [id, row] of snap.byId) {
+    const subjTokens = row.subject ? tokenize(row.subject) : null;
+    const origTokens = row.original_prompt ? tokenize(row.original_prompt) : null;
+    const enhTokens = row.enhanced_prompt ? tokenize(row.enhanced_prompt) : null;
+
     let score = 0;
+    let matched = 0;
 
-    // Tags overlap (cada tag que matchea = 3).
-    if (row.tags) {
-      for (const term of terms) {
-        if (row.tags.some((t) => pluralVariants(term).includes(t))) {
-          score += 3;
-        }
+    for (const term of terms) {
+      let termScore = 0;
+
+      // Tags: coincidencia de palabra completa (con plural mínimo), peso alto.
+      if (row.tags?.some((t) => pluralVariants(term).includes(t))) {
+        termScore += 4;
+      }
+
+      // Texto: token-match sobre subject/prompt, peso menor.
+      if (subjTokens && tokenMatches(term, subjTokens)) termScore += 2;
+      if (origTokens && tokenMatches(term, origTokens)) termScore += 1;
+      if (enhTokens && tokenMatches(term, enhTokens)) termScore += 1;
+
+      // Un término cuenta como un match aunque coincida en varios campos.
+      if (termScore > 0) {
+        matched++;
+        score += termScore;
       }
     }
 
-    // Subject token-match (= 2).
-    if (row.subject) {
-      const subjTokens = tokenize(row.subject);
-      if (terms.every((term) => tokenMatches(term, subjTokens))) {
-        score += 2;
-      }
-    }
-
-    // Original prompt token-match (= 1).
-    if (row.original_prompt) {
-      const origTokens = tokenize(row.original_prompt);
-      if (terms.every((term) => tokenMatches(term, origTokens))) {
-        score += 1;
-      }
-    }
-
-    // Enhanced prompt token-match (= 1).
-    if (row.enhanced_prompt) {
-      const enhTokens = tokenize(row.enhanced_prompt);
-      if (terms.every((term) => tokenMatches(term, enhTokens))) {
-        score += 1;
-      }
-    }
-
-    if (score > 0) scored.push({ id, score });
+    if (matched >= minMatched) scored.push({ id, score, matched });
   }
 
   // Orden: score DESC, created_at DESC, id DESC.

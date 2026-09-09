@@ -12,6 +12,8 @@ pnpm build:api               # tsc only
 pnpm build:web               # tsc -b && vite build
 pnpm lint                    # lint both packages
 pnpm dev                     # dev both (api :3001, web :5173)
+pnpm seed:generate           # sintetiza + siembra 1000 filas gen-* (DB_MOCK=false)
+pnpm seed:generate:clear     # borra filas gen-* y re-siembra
 ```
 
 ## Architecture
@@ -57,7 +59,7 @@ Tests live in `apps/api/test/`:
 - `exif.test.ts` — metadata embedding (requires exiftool)
 - `metadata.test.ts` — metadata roundtrip (requires exiftool)
 
-98 tests total. Run with `pnpm test` from root or `npx vitest run` from `apps/api/`.
+110 tests total (2 fallos conocidos en `metadata.test.ts` si exiftool no está configurado). Run with `pnpm test` from root or `npx vitest run` from `apps/api/`.
 
 ## Key files
 

@@ -4,6 +4,7 @@ import path from 'path';
 import { config } from './config';
 import { pingDb } from './db';
 import { graphStore, fetchAllRows } from './graph';
+import type { ImageRow } from './types';
 import type { GraphStore } from './graph';
 import { imagesRouter } from './routes/images';
 import { searchRouter } from './routes/search';
@@ -67,16 +68,25 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 
 /** Carga el grafo y arranca el refresh. */
 export async function bootGraph(): Promise<void> {
-  if (config.graph.engine === 'graph') {
-    try {
-      const rows = await fetchAllRows();
-      graphStore.load(rows);
-      graphStore.startRefresh(fetchAllRows, config.graph.refreshMs);
-      console.log(`[graph] refresh every ${config.graph.refreshMs}ms`);
-    } catch (err) {
-      console.warn('[graph] initial load failed, will retry on refresh:', (err as Error).message);
-    }
+  if (config.graph.engine !== 'graph') return;
+
+  // Carga inicial; si falla (e.g. postgres caído), el refresh sigue activo
+  // y reintentará automáticamente hasta que la DB responda.
+  const loadOnce = async (): Promise<ImageRow[]> => {
+    const rows = await fetchAllRows();
+    graphStore.load(rows);
+    return rows;
+  };
+
+  try {
+    await loadOnce();
+  } catch (err) {
+    console.warn('[graph] initial load failed, will retry on refresh:', (err as Error).message);
   }
+
+  // El timer SIEMPRE se arranca, incluso si la carga inicial falló.
+  graphStore.startRefresh(loadOnce, config.graph.refreshMs);
+  console.log(`[graph] refresh every ${config.graph.refreshMs}ms`);
 }
 
 // Auto-start only when run directly (not imported for tests).
