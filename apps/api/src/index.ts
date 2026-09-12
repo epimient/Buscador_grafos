@@ -3,7 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import { config } from './config';
 import { pingDb } from './db';
-import { graphStore, fetchAllRows } from './graph';
+import { graphStore, fetchAllRows, fetchDeltaRows } from './graph';
 import type { ImageRow } from './types';
 import type { GraphStore } from './graph';
 import { imagesRouter } from './routes/images';
@@ -66,7 +66,9 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   res.status(500).json({ error: message });
 });
 
-/** Carga el grafo y arranca el refresh. */
+/**
+ * Carga el grafo y arranca el refresh.
+ */
 export async function bootGraph(): Promise<void> {
   if (config.graph.engine !== 'graph') return;
 
@@ -85,8 +87,17 @@ export async function bootGraph(): Promise<void> {
   }
 
   // El timer SIEMPRE se arranca, incluso si la carga inicial falló.
-  graphStore.startRefresh(loadOnce, config.graph.refreshMs);
-  console.log(`[graph] refresh every ${config.graph.refreshMs}ms`);
+  // Cada tick decide entre rebuild completo (GRAPH_FULL_RELOAD_MS) o delta
+  // incremental desde el watermark (GRAPH_REFRESH_MS).
+  graphStore.startRefresh(
+    fetchAllRows,
+    (wm) => fetchDeltaRows(wm),
+    config.graph.refreshMs,
+    config.graph.fullReloadMs,
+  );
+  console.log(
+    `[graph] refresh every ${config.graph.refreshMs}ms, full reload every ${config.graph.fullReloadMs}ms`,
+  );
 }
 
 // Auto-start only when run directly (not imported for tests).

@@ -3,11 +3,13 @@ import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 
 // Mock data must be hoisted alongside vi.mock.
-const { mockSnapshot, mockSearch, mockRelated, mockTagsList, mockTagImages, mockFilters, mockStats } =
+const { mockSnapshot, mockSearch, mockScoreSearch, mockRelated, mockTagsList, mockTagImages, mockFilters, mockStats } =
   vi.hoisted(() => ({
     mockSnapshot: {
       graph: { neighbors: vi.fn().mockReturnValue([]) },
-      byId: new Map(),
+      byId: new Map([
+        ['g1', { id: 'g1', s3_url: 'https://example.com/g1.webp', tags: ['cat'] }],
+      ]),
       tagIndex: new Map(),
       styleIndex: new Map(),
       moodIndex: new Map(),
@@ -31,6 +33,10 @@ const { mockSnapshot, mockSearch, mockRelated, mockTagsList, mockTagImages, mock
       page: 1,
       limit: 24,
       hasMore: false,
+    }),
+    mockScoreSearch: vi.fn().mockReturnValue({
+      ids: ['g1'],
+      total: 1,
     }),
     mockRelated: vi.fn().mockReturnValue({
       items: [{ id: 'g2', s3_url: 'https://example.com/g2.webp', tags: ['dog'] }],
@@ -74,12 +80,15 @@ vi.mock('../src/graph', () => ({
     snapshot: mockSnapshot,
   },
   search: mockSearch,
+  scoreSearch: mockScoreSearch,
   related: mockRelated,
   tagsList: mockTagsList,
   tagImages: mockTagImages,
   filters: mockFilters,
   stats: mockStats,
   fetchAllRows: vi.fn().mockResolvedValue([]),
+  fetchDeltaRows: vi.fn().mockResolvedValue([]),
+  applyDelta: vi.fn(),
 }));
 
 import request from 'supertest';
@@ -122,7 +131,7 @@ describe('GET /api/search', () => {
     expect(typeof res.body.page).toBe('number');
     expect(typeof res.body.limit).toBe('number');
     expect(typeof res.body.hasMore).toBe('boolean');
-    expect(mockSearch).toHaveBeenCalled();
+    expect(mockScoreSearch).toHaveBeenCalled();
   });
 
   it('returns empty for empty query', async () => {

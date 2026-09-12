@@ -44,16 +44,17 @@ export interface EmbedMetadataResult {
 function argsFromOpts(opts: EmbedMetadataOpts): string[] {
   const args: string[] = [];
 
-  // Namespace propio: XMP-vorael
-  if (opts.id) args.push(`-XMP-vorael:id=${opts.id}`);
-  if (opts.style) args.push(`-XMP-vorael:style=${opts.style}`);
-  if (opts.mood) args.push(`-XMP-vorael:mood=${opts.mood}`);
-  if (opts.useCase) args.push(`-XMP-vorael:useCase=${opts.useCase}`);
+  // Namespace propio: XMP-vorael (los tags se escriben por su Name, tal como
+  // los define .ExifTool_config; `id` no es escribible como nombre de tag).
+  if (opts.id) args.push(`-XMP-vorael:ImageID=${opts.id}`);
+  if (opts.style) args.push(`-XMP-vorael:Style=${opts.style}`);
+  if (opts.mood) args.push(`-XMP-vorael:Mood=${opts.mood}`);
+  if (opts.useCase) args.push(`-XMP-vorael:UseCase=${opts.useCase}`);
   if (opts.colorPalette && opts.colorPalette.length > 0) {
-    args.push(`-XMP-vorael:palette=${opts.colorPalette.join(', ')}`);
+    args.push(`-XMP-vorael:ColorPalette=${opts.colorPalette.join(', ')}`);
   }
-  if (opts.fileName) args.push(`-XMP-vorael:fileName=${opts.fileName}`);
-  if (opts.createdAt) args.push(`-XMP-vorael:createdAt=${opts.createdAt}`);
+  if (opts.fileName) args.push(`-XMP-vorael:FileName=${opts.fileName}`);
+  if (opts.createdAt) args.push(`-XMP-vorael:CreatedAt=${opts.createdAt}`);
 
   // XMP estándar: legible por cualquier herramienta.
   if (opts.description) {
@@ -62,15 +63,17 @@ function argsFromOpts(opts: EmbedMetadataOpts): string[] {
   }
   args.push('-EXIF:Artist=Corporación Universitaria Americana - VORAEL');
 
+  // Keywords: bag XMP:Subject (survive webp y png). IPTC:Keywords se pierde en
+  // webp, así que no lo usamos como fuente primaria.
   if (opts.tags && opts.tags.length > 0) {
     for (const tag of opts.tags) {
-      args.push(`-IPTC:Keywords=${tag}`);
+      args.push(`-XMP:Subject+=${tag}`);
     }
   }
 
   if (opts.subject) {
-    args.push(`-XMP:Subject=${opts.subject}`);
     args.push(`-XMP:Title=${opts.subject}`);
+    args.push(`-XMP:Description=${opts.subject}`);
   }
 
   return args;
@@ -91,8 +94,8 @@ export async function embedMetadata(opts: EmbedMetadataOpts): Promise<EmbedMetad
     await writeFile(tmpIn, buffer);
 
     const args = [
-      '-overwrite_original',
       '-config', EXIFTOOL_CONFIG,
+      '-overwrite_original',
       tmpIn,
       '-o', tmpOut,
       ...argsFromOpts(opts),
@@ -147,8 +150,8 @@ export async function readImageMetadata(buffer: Buffer, ext: string): Promise<Re
     await writeFile(tmpFile, buffer);
 
     const { stdout } = await execFileAsync('exiftool', [
-      '-json',
       '-config', EXIFTOOL_CONFIG,
+      '-json',
       '-XMP:all',
       '-XMP-vorael:all',
       '-EXIF:ImageDescription',
@@ -163,37 +166,51 @@ export async function readImageMetadata(buffer: Buffer, ext: string): Promise<Re
     if (!Array.isArray(parsed) || parsed.length === 0) return fallback;
     const m = parsed[0];
 
-    // Mapeo de campos XMP-vorael (namespace propio)
-    const vorael = m.XMPVorael || m['XMP-vorael'] || {};
-    const hasVoraelMeta = !!(vorael.id || vorael.style || vorael.mood);
+    // XMP-vorael: exiftool devuelve los tags planos (por su Name) en el objeto
+    // raíz, no anidados. `palette` del config tiene Name ColorPalette pero
+    // exiftool lo emite como "Palette".
+    const id = m.Id ?? m.ImageID ?? null;
+    const style = m.Style ?? null;
+    const mood = m.Mood ?? null;
+    const useCase = m.UseCase ?? null;
+    const paletteRaw: string | null = m.Palette ?? m.ColorPalette ?? null;
+    const fileName = m.FileName ?? null;
+    const createdAtRaw: string | null = m.CreatedAt ?? null;
+    const hasVoraelMeta = !!(id || style || mood || useCase || paletteRaw || fileName || createdAtRaw);
 
-    // Tags: pueden venir de IPTC:Keywords (array) o XMP:Subject (string|array)
+    // Tags: XMP:Subject (bag) + IPTC:Keywords de respaldo.
     let tags: string[] = [];
-    const iptcKeywords = m.IPTCKeywords || m.IPTCKeyword;
-    if (Array.isArray(iptcKeywords)) tags = iptcKeywords;
-    else if (typeof iptcKeywords === 'string') tags = [iptcKeywords];
-    const xmpSubject = m.XMPSubject;
+    const xmpSubject = m.Subject ?? m.XMPSubject;
     if (Array.isArray(xmpSubject)) tags = tags.concat(xmpSubject);
     else if (typeof xmpSubject === 'string') tags.push(xmpSubject);
+    const iptcKeywords = m.Keywords ?? m.IPTCKeywords ?? m.IPTCKeyword ?? m.XMPKeywords;
+    if (Array.isArray(iptcKeywords)) tags = tags.concat(iptcKeywords);
+    else if (typeof iptcKeywords === 'string') tags.push(iptcKeywords);
 
     // Palette: Guardado como "hex1, hex2, ..." en XMP-vorael
-    const paletteRaw = vorael.palette || null;
     const colorPalette = paletteRaw
       ? paletteRaw.split(',').map((s: string) => s.trim()).filter(Boolean)
       : [];
 
+    // CreatedAt: exiftool reformatea fechas a "YYYY:MM:DD HH:MM:SSZ";
+    // lo normalizamos de vuelta a ISO (T extendido).
+    let createdAt = createdAtRaw;
+    if (createdAt && /^\d{4}:\d{2}:\d{2} \d{2}:\d{2}:\d{2}Z?$/.test(createdAt)) {
+      createdAt = createdAt.replace(/^(\d{4}):(\d{2}):(\d{2}) (\d{2}:\d{2}:\d{2})(Z?)$/, '$1-$2-$3T$4$5');
+    }
+
     return {
-      id: vorael.id || null,
-      description: m.EXIFImageDescription || m.XMPDescription || null,
-      subject: m.XMPSubject || m.XMPTitle || null,
+      id,
+      description: m.ImageDescription ?? m.Description ?? null,
+      subject: m.Title ?? m.XMPTitle ?? null,
       tags: [...new Set(tags)].filter(Boolean),
-      style: vorael.style || null,
-      mood: vorael.mood || null,
-      useCase: vorael.useCase || null,
+      style,
+      mood,
+      useCase,
       colorPalette,
-      fileName: vorael.fileName || null,
-      createdAt: vorael.createdAt || null,
-      artist: m.EXIFArtist || null,
+      fileName,
+      createdAt,
+      artist: m.Artist ?? m.EXIFArtist ?? null,
       hasVoraelMeta,
     };
   } catch {

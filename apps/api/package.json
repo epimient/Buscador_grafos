@@ -16,6 +16,8 @@
     "backfill": "ts-node --transpile-only src/scripts/backfill.ts",
     "scan": "ts-node --transpile-only src/scripts/scanner.ts",
     "seed:db": "ts-node --transpile-only src/scripts/seed-db.ts",
+    "snapshot:prod": "ts-node --transpile-only src/scripts/snapshot-prod.ts",
+    "embeddings:build": "ts-node --transpile-only src/scripts/embeddings-build.ts",
     "seed:generate": "ts-node --transpile-only src/scripts/generate-seed.ts",
     "seed:generate:clear": "ts-node --transpile-only src/scripts/generate-seed.ts --clear"
   },

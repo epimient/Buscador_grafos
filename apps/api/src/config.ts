@@ -41,7 +41,14 @@ export const config = {
   },
   graph: {
     refreshMs: Number(optional('GRAPH_REFRESH_MS', '60000')),
+    fullReloadMs: Number(optional('GRAPH_FULL_RELOAD_MS', '600000')),
     engine: optional('SEARCH_ENGINE', 'graph') as 'graph' | 'sql',
+  },
+  semantic: {
+    mode: optional('SEARCH_MODE', 'lexical') as 'lexical' | 'semantic' | 'hybrid',
+    model: optional('EMBED_MODEL', 'bge-m3'),
+    server: optional('EMBED_SERVER', 'http://127.0.0.1:11434'),
+    dim: Number(optional('EMBED_DIM', '1024')),
   },
   metadata: {
     embed: optional('METADATA_EMBED', 'none') as 'exiftool' | 'none',

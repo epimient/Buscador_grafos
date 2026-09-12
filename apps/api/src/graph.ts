@@ -17,10 +17,14 @@
  *
  * ## Sincronización
  *
- * Se construye completo al arrancar. Un timer periódico (GRAPH_REFRESH_MS) compara
- * un watermark barato (MAX(created_at), COUNT). Si cambió, reconstruye completo y
- * reemplaza atómicamente (nunca se ve un grafo a medias). Si falla, conserva el
- * último snapshot válido.
+ * Se construye completo al arrancar. Un timer periódico (GRAPH_REFRESH_MS) hace un
+ * refresh incremental: consulta solo las filas nuevas (watermark keyset sobre
+ * `(created_at, id)`) y las aplica mutando las estructuras en sitio (applyDelta).
+ * Cada GRAPH_FULL_RELOAD_MS se hace un rebuild completo con el watermark fresco
+ * para detectar updates/deletes de filas antiguas. Si una pasada falla, se
+ * conserva el último snapshot válido. El applyDelta es síncrono dentro del timer
+ * (sin awaits entre la lectura y la escritura), así que las rutas nunca observan
+ * un grafo a medias.
  */
 import Graph from 'graphology';
 import type { ImageRow } from './types';
@@ -42,8 +46,8 @@ export interface GraphSnapshot {
   moodIndex: Map<string, Set<string>>;
   useCaseIndex: Map<string, Set<string>>;
   colorIndex: Map<string, Set<string>>;
-  /** Índice de texto por imagen: tokens de subject/original/enhanced. */
-  textIndex: Map<string, Token[]>;
+  /** Índice de texto por imagen: tokens precomputados por campo (Sets rápidos). */
+  textIndex: Map<string, TextTokens>;
   /** Pesos de co-ocurrencia entre tags: `tagA → tagB → weight`. */
   coWeights: Map<string, Map<string, number>>;
   /** Lista global ordenada `created_at DESC, id DESC`. */
@@ -108,14 +112,20 @@ function pluralVariants(token: Token): Token[] {
 
 /**
  * Verifica si un token coincide con un conjunto de tokens de referencia,
- * considerando plurales mínimos.
+ * considerando plurales mínimos. Recibe Set para evitar reconstruirlo por término.
  */
-function tokenMatches(term: Token, referenceTokens: Token[]): boolean {
-  const refSet = new Set(referenceTokens);
+function tokenMatches(term: Token, referenceTokens: Set<Token>): boolean {
   for (const variant of pluralVariants(term)) {
-    if (refSet.has(variant)) return true;
+    if (referenceTokens.has(variant)) return true;
   }
   return false;
+}
+
+/** Tokens precomputados por imagen/config para search (pesos por campo). */
+export interface TextTokens {
+  subject: Set<Token>;
+  original: Set<Token>;
+  enhanced: Set<Token>;
 }
 
 // ── Construcción del grafo ──────────────────────────────────────────────────
@@ -133,135 +143,157 @@ const COLOR = 'color:';
  */
 export function buildGraph(rows: ImageRow[]): GraphSnapshot {
   const t0 = Date.now();
-  const graph = new Graph({ type: 'undirected' });
-  const byId = new Map<string, ImageRow>();
-  const tagIndex = new Map<string, Set<string>>();
-  const styleIndex = new Map<string, Set<string>>();
-  const moodIndex = new Map<string, Set<string>>();
-  const useCaseIndex = new Map<string, Set<string>>();
-  const colorIndex = new Map<string, Set<string>>();
-  const textIndex = new Map<string, Token[]>();
-
-  // Conteo para stats y co-ocurrencia.
-  const tagCounts = new Map<string, number>();
-  const styleCounts = new Map<string, number>();
-  const moodCounts = new Map<string, number>();
-  const useCaseCounts = new Map<string, number>();
-  const colorCounts = new Map<string, number>();
-
-  // Co-ocurrencia de tags: tagA → tagB → weight.
-  const coOccurrence = new Map<string, Map<string, number>>();
+  const builder: SnapshotBuilder = {
+    graph: new Graph({ type: 'undirected' }),
+    byId: new Map(),
+    tagIndex: new Map(),
+    styleIndex: new Map(),
+    moodIndex: new Map(),
+    useCaseIndex: new Map(),
+    colorIndex: new Map(),
+    textIndex: new Map(),
+    coWeights: new Map(),
+  };
 
   for (const row of rows) {
-    byId.set(row.id, row);
-
-    // Nodo Image.
-    graph.addNode(row.id, { type: 'Image' });
-
-    // Tags.
-    if (row.tags) {
-      for (const tag of row.tags) {
-        if (!tag || tag === '') continue;
-        const key = TAG + tag;
-
-        // Nodo Tag.
-        if (!graph.hasNode(key)) graph.addNode(key, { type: 'Tag', name: tag });
-        graph.mergeUndirectedEdge(row.id, key, { type: 'TAGGED_WITH' });
-
-        // Índice.
-        let set = tagIndex.get(tag);
-        if (!set) { set = new Set(); tagIndex.set(tag, set); }
-        set.add(row.id);
-
-        // Conteo.
-        tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
-      }
-
-      // Co-ocurrencia.
-      for (let i = 0; i < row.tags.length; i++) {
-        for (let j = i + 1; j < row.tags.length; j++) {
-          const a = row.tags[i];
-          const b = row.tags[j];
-          if (!a || !b || a === '' || b === '') continue;
-          let mapA = coOccurrence.get(a);
-          if (!mapA) { mapA = new Map(); coOccurrence.set(a, mapA); }
-          mapA.set(b, (mapA.get(b) ?? 0) + 1);
-          let mapB = coOccurrence.get(b);
-          if (!mapB) { mapB = new Map(); coOccurrence.set(b, mapB); }
-          mapB.set(a, (mapB.get(a) ?? 0) + 1);
-        }
-      }
-    }
-
-    // Style.
-    if (row.style) {
-      const key = STYLE + row.style;
-      if (!graph.hasNode(key)) graph.addNode(key, { type: 'Style', name: row.style });
-      graph.mergeUndirectedEdge(row.id, key, { type: 'HAS_STYLE' });
-      let set = styleIndex.get(row.style);
-      if (!set) { set = new Set(); styleIndex.set(row.style, set); }
-      set.add(row.id);
-      styleCounts.set(row.style, (styleCounts.get(row.style) ?? 0) + 1);
-    }
-
-    // Mood.
-    if (row.mood) {
-      const key = MOOD + row.mood;
-      if (!graph.hasNode(key)) graph.addNode(key, { type: 'Mood', name: row.mood });
-      graph.mergeUndirectedEdge(row.id, key, { type: 'HAS_MOOD' });
-      let set = moodIndex.get(row.mood);
-      if (!set) { set = new Set(); moodIndex.set(row.mood, set); }
-      set.add(row.id);
-      moodCounts.set(row.mood, (moodCounts.get(row.mood) ?? 0) + 1);
-    }
-
-    // Use case.
-    if (row.use_case) {
-      const key = USE_CASE + row.use_case;
-      if (!graph.hasNode(key)) graph.addNode(key, { type: 'UseCase', name: row.use_case });
-      graph.mergeUndirectedEdge(row.id, key, { type: 'FOR_USE_CASE' });
-      let set = useCaseIndex.get(row.use_case);
-      if (!set) { set = new Set(); useCaseIndex.set(row.use_case, set); }
-      set.add(row.id);
-      useCaseCounts.set(row.use_case, (useCaseCounts.get(row.use_case) ?? 0) + 1);
-    }
-
-    // Colors (paleta completa).
-    if (row.color_palette) {
-      for (const hex of row.color_palette) {
-        if (!hex || hex === '') continue;
-        const key = COLOR + hex;
-        if (!graph.hasNode(key)) graph.addNode(key, { type: 'Color', hex });
-        graph.mergeUndirectedEdge(row.id, key, { type: 'HAS_COLOR' });
-        let set = colorIndex.get(hex);
-        if (!set) { set = new Set(); colorIndex.set(hex, set); }
-        set.add(row.id);
-        colorCounts.set(hex, (colorCounts.get(hex) ?? 0) + 1);
-      }
-    }
-
-    // Texto tokenizado para search.
-    const tokens: Token[] = [];
-    if (row.subject) tokens.push(...tokenize(row.subject));
-    if (row.original_prompt) tokens.push(...tokenize(row.original_prompt));
-    if (row.enhanced_prompt) tokens.push(...tokenize(row.enhanced_prompt));
-    textIndex.set(row.id, tokens);
+    addRowToBuilder(builder, row);
   }
 
   // Aristas de co-ocurrencia entre tags.
-  for (const [tagA, partners] of coOccurrence) {
-    for (const [tagB, weight] of partners) {
-      const keyA = TAG + tagA;
-      const keyB = TAG + tagB;
-      if (graph.hasNode(keyA) && graph.hasNode(keyB)) {
-        graph.mergeUndirectedEdge(keyA, keyB, { type: 'CO_OCCURS_WITH', weight });
+  rebuildCoOccurrenceEdges(builder);
+
+  return finalizeSnapshot(builder, t0);
+}
+
+// ── Construcción incremental (compartida por buildGraph y applyDelta) ───────
+
+/**
+ * Estructuras mutables que se llenan fila a fila. Es la parte "viva" del
+ * snapshot; las derivadas (orderedIds, topByDegree, stats) se recalculan con
+ * finalizeSnapshot. GraphSnapshot es este builder + las derivadas.
+ */
+interface SnapshotBuilder {
+  graph: Graph;
+  byId: Map<string, ImageRow>;
+  tagIndex: Map<string, Set<string>>;
+  styleIndex: Map<string, Set<string>>;
+  moodIndex: Map<string, Set<string>>;
+  useCaseIndex: Map<string, Set<string>>;
+  colorIndex: Map<string, Set<string>>;
+  textIndex: Map<string, TextTokens>;
+  coWeights: Map<string, Map<string, number>>;
+}
+
+/** Aplica una fila a las estructuras mutables (nodo, índices, co-ocurrencias). */
+function addRowToBuilder(b: SnapshotBuilder, row: ImageRow): void {
+  b.byId.set(row.id, row);
+
+  // Nodo Image.
+  b.graph.addNode(row.id, { type: 'Image' });
+
+  // Tags.
+  if (row.tags) {
+    for (const tag of row.tags) {
+      if (!tag || tag === '') continue;
+      const key = TAG + tag;
+
+      // Nodo Tag.
+      if (!b.graph.hasNode(key)) b.graph.addNode(key, { type: 'Tag', name: tag });
+      b.graph.mergeUndirectedEdge(row.id, key, { type: 'TAGGED_WITH' });
+
+      // Índice.
+      let set = b.tagIndex.get(tag);
+      if (!set) { set = new Set(); b.tagIndex.set(tag, set); }
+      set.add(row.id);
+    }
+
+    // Co-ocurrencia.
+    for (let i = 0; i < row.tags.length; i++) {
+      for (let j = i + 1; j < row.tags.length; j++) {
+        const tagA = row.tags[i];
+        const tagB = row.tags[j];
+        if (!tagA || !tagB || tagA === '' || tagB === '') continue;
+        let mapA = b.coWeights.get(tagA);
+        if (!mapA) { mapA = new Map(); b.coWeights.set(tagA, mapA); }
+        mapA.set(tagB, (mapA.get(tagB) ?? 0) + 1);
+        let mapB = b.coWeights.get(tagB);
+        if (!mapB) { mapB = new Map(); b.coWeights.set(tagB, mapB); }
+        mapB.set(tagA, (mapB.get(tagA) ?? 0) + 1);
       }
     }
   }
 
+  // Style.
+  if (row.style) {
+    const key = STYLE + row.style;
+    if (!b.graph.hasNode(key)) b.graph.addNode(key, { type: 'Style', name: row.style });
+    b.graph.mergeUndirectedEdge(row.id, key, { type: 'HAS_STYLE' });
+    let set = b.styleIndex.get(row.style);
+    if (!set) { set = new Set(); b.styleIndex.set(row.style, set); }
+    set.add(row.id);
+  }
+
+  // Mood.
+  if (row.mood) {
+    const key = MOOD + row.mood;
+    if (!b.graph.hasNode(key)) b.graph.addNode(key, { type: 'Mood', name: row.mood });
+    b.graph.mergeUndirectedEdge(row.id, key, { type: 'HAS_MOOD' });
+    let set = b.moodIndex.get(row.mood);
+    if (!set) { set = new Set(); b.moodIndex.set(row.mood, set); }
+    set.add(row.id);
+  }
+
+  // Use case.
+  if (row.use_case) {
+    const key = USE_CASE + row.use_case;
+    if (!b.graph.hasNode(key)) b.graph.addNode(key, { type: 'UseCase', name: row.use_case });
+    b.graph.mergeUndirectedEdge(row.id, key, { type: 'FOR_USE_CASE' });
+    let set = b.useCaseIndex.get(row.use_case);
+    if (!set) { set = new Set(); b.useCaseIndex.set(row.use_case, set); }
+    set.add(row.id);
+  }
+
+  // Colors (paleta completa).
+  if (row.color_palette) {
+    for (const hex of row.color_palette) {
+      if (!hex || hex === '') continue;
+      const key = COLOR + hex;
+      if (!b.graph.hasNode(key)) b.graph.addNode(key, { type: 'Color', hex });
+      b.graph.mergeUndirectedEdge(row.id, key, { type: 'HAS_COLOR' });
+      let set = b.colorIndex.get(hex);
+      if (!set) { set = new Set(); b.colorIndex.set(hex, set); }
+      set.add(row.id);
+    }
+  }
+
+  // Texto tokenizado por campo para search (Sets precomputados, sin re-tokenizar).
+  b.textIndex.set(row.id, {
+    subject: new Set(row.subject ? tokenize(row.subject) : []),
+    original: new Set(row.original_prompt ? tokenize(row.original_prompt) : []),
+    enhanced: new Set(row.enhanced_prompt ? tokenize(row.enhanced_prompt) : []),
+  });
+}
+
+/** (Re)crea las aristas CO_OCCURS_WITH a partir de los pesos acumulados. */
+function rebuildCoOccurrenceEdges(b: SnapshotBuilder): void {
+  for (const [tagA, partners] of b.coWeights) {
+    for (const [tagB, weight] of partners) {
+      const keyA = TAG + tagA;
+      const keyB = TAG + tagB;
+      if (b.graph.hasNode(keyA) && b.graph.hasNode(keyB)) {
+        b.graph.mergeUndirectedEdge(keyA, keyB, { type: 'CO_OCCURS_WITH', weight });
+      }
+    }
+  }
+}
+
+/**
+ * Calcula las estructuras derivadas (orderedIds, topByDegree, stats) a partir
+ * del builder y devuelve el snapshot final, listo para que las rutas lo lean.
+ */
+function finalizeSnapshot(b: SnapshotBuilder, t0: number): GraphSnapshot {
   // Lista ordenada (created_at DESC, id DESC).
-  const orderedIds = rows
-    .slice()
+  const orderedIds = [...b.byId.values()]
     .sort((a, b) => {
       const aTime = String(a.created_at);
       const bTime = String(b.created_at);
@@ -271,42 +303,42 @@ export function buildGraph(rows: ImageRow[]): GraphSnapshot {
     .map((r) => r.id);
 
   // Nodos ordenados por grado (para export sin center, evita O(n log n) por request).
-  const topByDegree = graph.nodes()
-    .map((n) => ({ id: n, degree: graph.degree(n) }))
+  const topByDegree = b.graph.nodes()
+    .map((n) => ({ id: n, degree: b.graph.degree(n) }))
     .sort((a, b) => b.degree - a.degree)
     .map((n) => n.id);
 
   // Stats.
-  const tagStats = [...tagCounts.entries()]
-    .map(([tag, count]) => ({ tag, count }))
+  const tagStats = [...b.tagIndex.entries()]
+    .map(([tag, ids]) => ({ tag, count: ids.size }))
     .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
 
-  const styleStats = [...styleCounts.entries()]
-    .map(([value, count]) => ({ value, count }))
+  const styleStats = [...b.styleIndex.entries()]
+    .map(([value, ids]) => ({ value, count: ids.size }))
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
 
-  const moodStats = [...moodCounts.entries()]
-    .map(([value, count]) => ({ value, count }))
+  const moodStats = [...b.moodIndex.entries()]
+    .map(([value, ids]) => ({ value, count: ids.size }))
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
 
-  const useCaseStats = [...useCaseCounts.entries()]
-    .map(([value, count]) => ({ value, count }))
+  const useCaseStats = [...b.useCaseIndex.entries()]
+    .map(([value, ids]) => ({ value, count: ids.size }))
     .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
 
   return {
-    graph,
-    byId,
-    tagIndex,
-    styleIndex,
-    moodIndex,
-    useCaseIndex,
-    colorIndex,
-    textIndex,
-    coWeights: coOccurrence,
+    graph: b.graph,
+    byId: b.byId,
+    tagIndex: b.tagIndex,
+    styleIndex: b.styleIndex,
+    moodIndex: b.moodIndex,
+    useCaseIndex: b.useCaseIndex,
+    colorIndex: b.colorIndex,
+    textIndex: b.textIndex,
+    coWeights: b.coWeights,
     orderedIds,
     topByDegree,
     stats: {
-      total: rows.length,
+      total: b.byId.size,
       styles: styleStats,
       moods: moodStats,
       tags: tagStats,
@@ -346,8 +378,37 @@ export function search(
   const limit = Math.min(100, Math.max(1, opts.limit ?? 24));
   const offset = (page - 1) * limit;
 
+  const scored = scoreSearch(snap, q);
+  const total = scored.total;
+  const slice = scored.ids.slice(offset, offset + limit);
+  const items = slice.map((id) => snap.byId.get(id)!).filter(Boolean);
+
+  return {
+    items,
+    total,
+    page,
+    limit,
+    hasMore: offset + items.length < total,
+  };
+}
+
+export interface ScoredSearch {
+  /** Ids rankeados (score DESC, created_at DESC, id DESC), ya filtrados por minMatched. */
+  ids: string[];
+  total: number;
+}
+
+/**
+ * Igual que `search` pero devuelve solo el ranking de ids, sin paginar.
+ * Sirve como input para el modo hybrid (RRF fusiona ranking léxico + semántico).
+ */
+export function scoreSearch(
+  snap: GraphSnapshot,
+  q: string,
+  _opts: { page?: number; limit?: number } = {},
+): ScoredSearch {
   if (!q.trim()) {
-    return { items: [], total: 0, page, limit, hasMore: false };
+    return { ids: [], total: 0 };
   }
 
   // Términos únicos (en minúsculas), para que una palabra repetida no domine.
@@ -365,13 +426,11 @@ export function search(
   const minMatched = terms.length <= 3 ? 1 : Math.ceil(terms.length * 0.5);
 
   // Calcular score por cobertura para cada imagen.
+  // Los tokens por campo vienen precomputados en textIndex (Sets), así que no
+  // hay que re-tokenizar ni reconstruir Sets por request.
   const scored: { id: string; score: number; matched: number }[] = [];
 
-  for (const [id, row] of snap.byId) {
-    const subjTokens = row.subject ? tokenize(row.subject) : null;
-    const origTokens = row.original_prompt ? tokenize(row.original_prompt) : null;
-    const enhTokens = row.enhanced_prompt ? tokenize(row.enhanced_prompt) : null;
-
+  for (const [id, toks] of snap.textIndex) {
     let score = 0;
     let matched = 0;
 
@@ -379,14 +438,15 @@ export function search(
       let termScore = 0;
 
       // Tags: coincidencia de palabra completa (con plural mínimo), peso alto.
+      const row = snap.byId.get(id)!;
       if (row.tags?.some((t) => pluralVariants(term).includes(t))) {
         termScore += 4;
       }
 
-      // Texto: token-match sobre subject/prompt, peso menor.
-      if (subjTokens && tokenMatches(term, subjTokens)) termScore += 2;
-      if (origTokens && tokenMatches(term, origTokens)) termScore += 1;
-      if (enhTokens && tokenMatches(term, enhTokens)) termScore += 1;
+      // Texto: token-match sobre subject/prompt precomputado, peso menor.
+      if (tokenMatches(term, toks.subject)) termScore += 2;
+      if (tokenMatches(term, toks.original)) termScore += 1;
+      if (tokenMatches(term, toks.enhanced)) termScore += 1;
 
       // Un término cuenta como un match aunque coincida en varios campos.
       if (termScore > 0) {
@@ -409,17 +469,7 @@ export function search(
     return b.id.localeCompare(a.id);
   });
 
-  const total = scored.length;
-  const slice = scored.slice(offset, offset + limit);
-  const items = slice.map((s) => snap.byId.get(s.id)!);
-
-  return {
-    items,
-    total,
-    page,
-    limit,
-    hasMore: offset + items.length < total,
-  };
+  return { ids: scored.map((s) => s.id), total: scored.length };
 }
 
 // ── Related ─────────────────────────────────────────────────────────────────
@@ -700,33 +750,119 @@ function exportSnapshot(
 
 // ── Store (manejo de snapshot + refresh) ────────────────────────────────────
 
+/**
+ * Watermark keyset: la última fila aplicada (created_at, id). El refresh
+ * incremental consulta filas estrictamente mayores a este punto.
+ */
+export interface Watermark {
+  created_at: string;
+  id: string;
+}
+
+/**
+ * Normaliza created_at para comparación de watermark. Si ya es string
+ * (producido por to_char con .US, o fixtures ISO), se conserva tal cual para
+ * no truncar microsegundos. Si es Date (pg sin to_char), se convierte a ISO.
+ */
+function created_at_string(v: string | Date): string {
+  return typeof v === 'string' ? v : v.toISOString();
+}
+
+/** Calcula el watermark máximo a partir de las filas aplicadas. */
+export function computeWatermark(rows: ImageRow[]): Watermark | null {
+  if (rows.length === 0) return null;
+  let max: Watermark | null = null;
+  for (const row of rows) {
+    const ts = created_at_string(row.created_at);
+    if (!max || ts > max.created_at || (ts === max.created_at && row.id > max.id)) {
+      max = { created_at: ts, id: row.id };
+    }
+  }
+  return max;
+}
+
+/**
+ * Aplica filas nuevas a un snapshot existente, mutando sus estructuras in situ
+ * (por eso debe ejecutarse de forma síncrona, sin awaits entre escrituras).
+ *
+ * Solo maneja adiciones (append-only): las filas deben corresponder a ids que
+ * aún no existen en el snapshot. Updates/deletes de filas antiguas los detecta
+ * el rebuild completo periódico (GRAPH_FULL_RELOAD_MS).
+ */
+export function applyDelta(snap: GraphSnapshot, newRows: ImageRow[]): void {
+  const t0 = Date.now();
+  let added = 0;
+
+  for (const row of newRows) {
+    if (snap.byId.has(row.id)) continue; // ya existe; el rebuild la reconciliaría
+    addRowToBuilder(snap, row);
+    added++;
+  }
+
+  if (added === 0) return;
+
+  // Recrear aristas CO_OCCURS_WITH con los pesos ya actualizados.
+  rebuildCoOccurrenceEdges(snap);
+
+  // Recalcular derivadas (ahora que el builder está completo).
+  const next = finalizeSnapshot(snap, t0);
+  snap.orderedIds = next.orderedIds;
+  snap.topByDegree = next.topByDegree;
+  snap.stats = next.stats;
+  snap.builtAt = next.builtAt;
+  snap.buildMs = next.buildMs;
+}
+
 export class GraphStore {
   private _snapshot: GraphSnapshot | null = null;
   private _timer: ReturnType<typeof setInterval> | null = null;
   private _ready = false;
+  private _watermark: Watermark | null = null;
+  private _lastFullReload = 0;
 
   get snapshot(): GraphSnapshot | null { return this._snapshot; }
   get ready(): boolean { return this._ready; }
+  get watermark(): Watermark | null { return this._watermark; }
 
   /** Carga el snapshot desde filas (pura, sin I/O). */
   load(rows: ImageRow[]): void {
     this._snapshot = buildGraph(rows);
+    this._watermark = computeWatermark(rows);
     this._ready = true;
+    this._lastFullReload = Date.now();
     console.log(
       `[graph] loaded ${rows.length} images, ${this._snapshot.graph.order} nodes, ${this._snapshot.graph.size} edges`,
     );
   }
 
-  /** Inicia el timer de refresh periódico. */
+  /**
+   * Inicia el timer de refresh periódico.
+   *
+   * Cada tick decide: si pasó fullReloadMs (o aún no hay watermark), hace un
+   * fetch completo + rebuild; si no, hace un fetch incremental (delta) y lo
+   * aplica mutando el snapshot actual.
+   */
   startRefresh(
-    fetchFn: () => Promise<ImageRow[]>,
+    fetchAllFn: () => Promise<ImageRow[]>,
+    fetchDeltaFn: (wm: Watermark) => Promise<ImageRow[]>,
     intervalMs: number,
+    fullReloadMs: number,
   ): void {
     if (this._timer) clearInterval(this._timer);
     this._timer = setInterval(async () => {
       try {
-        const rows = await fetchFn();
-        this.load(rows);
+        const needFull = !this._watermark || Date.now() - this._lastFullReload >= fullReloadMs;
+        if (needFull) {
+          const rows = await fetchAllFn();
+          this.load(rows);
+        } else {
+          const rows = await fetchDeltaFn(this._watermark!);
+          if (rows.length > 0) {
+            applyDelta(this._snapshot!, rows);
+            this._watermark = computeWatermark(rows) ?? this._watermark;
+            console.log(`[graph] delta +${rows.length} refreshed (buildMs ${this._snapshot?.buildMs}ms)`);
+          }
+        }
       } catch (err) {
         console.error('[graph] refresh failed:', err);
       }
@@ -755,8 +891,24 @@ export class GraphStore {
 export const graphStore = new GraphStore();
 
 /**
+ * Normaliza filas de Postgres: pg devuelve timestamptz como `Date` (1ms de
+ * precisión), pero el watermark y los ordenamientos necesitan el valor exacto
+ * con microsegundos. Se selecciona `created_at` ya casteado a texto ISO UTC
+ * (`to_char` con .US) para no perder precisión en la frontera JS. Este helper
+ * solo defiende contra objetos Date residuales (mock/fixtures no aplican).
+ */
+function normalizeRows(rows: ImageRow[]): ImageRow[] {
+  return rows.map((r) => {
+    const ts = r.created_at as unknown;
+    return typeof ts !== 'string'
+      ? { ...r, created_at: (ts as Date).toISOString() }
+      : r;
+  });
+}
+
+/**
  * Fetch completo de generated_images desde Postgres.
- * Se usa para la carga inicial y el refresh periódico.
+ * Se usa para la carga inicial y el rebuild periódico (GRAPH_FULL_RELOAD_MS).
  */
 export async function fetchAllRows(): Promise<ImageRow[]> {
   const { config } = await import('./config');
@@ -767,8 +919,29 @@ export async function fetchAllRows(): Promise<ImageRow[]> {
   const { pool } = await import('./db');
   const { rows } = await pool.query(
     `SELECT id, s3_key, s3_url, original_prompt, enhanced_prompt, tags, style, subject,
-            mood, color_palette, use_case, filename, created_at
+            mood, color_palette, use_case, filename,
+            to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
      FROM generated_images`,
   );
-  return rows as ImageRow[];
+  return normalizeRows(rows as unknown as ImageRow[]);
+}
+
+/**
+ * Fetch incremental: filas estrictamente mayores al watermark (created_at, id).
+ * En mock mode devuelve [] porque los datos son estáticos.
+ */
+export async function fetchDeltaRows(wm: Watermark): Promise<ImageRow[]> {
+  const { config } = await import('./config');
+  if (config.mock) return [];
+  const { pool } = await import('./db');
+  const { rows } = await pool.query(
+    `SELECT id, s3_key, s3_url, original_prompt, enhanced_prompt, tags, style, subject,
+            mood, color_palette, use_case, filename,
+            to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at
+     FROM generated_images
+     WHERE (created_at, id::text) > ($1::timestamptz, $2::text)
+     ORDER BY created_at ASC, id ASC`,
+    [wm.created_at, wm.id],
+  );
+  return normalizeRows(rows as unknown as ImageRow[]);
 }

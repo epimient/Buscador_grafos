@@ -105,11 +105,11 @@ describe('buildGraph', () => {
 
   it('populates textIndex with tokenized words', () => {
     const snap = buildGraph(sampleRows);
-    const tokens = snap.textIndex.get(sampleRows[0].id);
-    expect(tokens).toBeDefined();
-    expect(tokens).toContain('cat');
-    expect(tokens).toContain('windowsill');
-    expect(tokens).toContain('fluffy');
+    const toks = snap.textIndex.get(sampleRows[0].id);
+    expect(toks).toBeDefined();
+    expect(toks!.subject.has('cat')).toBe(true);
+    expect(toks!.original.has('windowsill')).toBe(true);
+    expect(toks!.enhanced.has('fluffy')).toBe(true);
   });
 
   it('orderedIds is sorted by created_at DESC, id DESC', () => {
@@ -147,7 +147,11 @@ describe('buildGraph', () => {
     expect(snap.graph.hasNode('emp-01')).toBe(true);
     expect(snap.stats.total).toBe(1);
     expect(snap.tagIndex.size).toBe(0);
-    expect(snap.textIndex.get('emp-01')).toEqual([]);
+    expect(snap.textIndex.get('emp-01')).toEqual({
+      subject: new Set(),
+      original: new Set(),
+      enhanced: new Set(),
+    });
   });
 
   it('handles empty input', () => {

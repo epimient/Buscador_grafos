@@ -1,15 +1,24 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { graphStore, search as graphSearch } from '../graph';
+import { graphStore, scoreSearch } from '../graph';
 import { config } from '../config';
 
 export const searchRouter = Router();
 
-// GET /api/search?q=...&page=1&limit=24
+// Cache del índice semántico (in-memory). Se carga perezosamente en el primer
+// request en modo semantic/hybrid y se mantiene mientras el proceso viva.
+let semIndexCache: import('../embeddings').SemanticIndex | null = null;
+
+// GET /api/search?q=...&page=1&limit=24&mode=hybrid
 searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     const page = Math.max(1, Number(req.query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 24)));
+    const mode =
+      typeof req.query.mode === 'string' &&
+      ['lexical', 'semantic', 'hybrid'].includes(req.query.mode)
+        ? req.query.mode
+        : config.semantic.mode;
 
     if (!q) {
       res.json({ items: [], page, limit, total: 0, hasMore: false, q });
@@ -18,14 +27,44 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
 
     if (config.graph.engine === 'graph' && graphStore.ready) {
       const snap = graphStore.snapshot!;
-      const result = graphSearch(snap, q, { page, limit });
+      const lexical = scoreSearch(snap, q);
+
+      let rankedIds = lexical.ids;
+
+      // Modo hybrid/semantic requieren el índice y Ollama; si cualquiera falla
+      // o el índice está vacío, degradamos a lexical sin romper la request.
+      if (mode !== 'lexical') {
+        const { loadSemanticIndex, embedQuery, searchSemantic, rrfFuse } =
+          await import('../embeddings');
+        if (!semIndexCache) semIndexCache = await loadSemanticIndex();
+        const qVec = await embedQuery(q);
+
+        if (semIndexCache && semIndexCache.dim > 0 && qVec) {
+          const semantic = searchSemantic(semIndexCache, qVec, 100);
+          if (mode === 'semantic') {
+            rankedIds = semantic.map((s) => s.id);
+          } else {
+            rankedIds = rrfFuse(
+              lexical.ids.map((id) => ({ id })),
+              semantic.map((s) => ({ id: s.id })),
+            ).map((r) => r.id);
+          }
+        }
+      }
+
+      const total = mode === 'semantic' ? rankedIds.length : lexical.total;
+      const offset = (page - 1) * limit;
+      const slice = rankedIds.slice(offset, offset + limit);
+      const items = slice.map((id) => snap.byId.get(id)!).filter(Boolean);
+
       res.json({
-        items: result.items,
-        page: result.page,
-        limit: result.limit,
-        total: result.total,
-        hasMore: result.hasMore,
+        items,
+        page,
+        limit,
+        total,
+        hasMore: offset + items.length < total,
         q,
+        mode,
       });
       return;
     }
@@ -77,6 +116,7 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
       total,
       hasMore: offset + dataRes.rows.length < total,
       q,
+      mode,
     });
   } catch (err) {
     next(err);

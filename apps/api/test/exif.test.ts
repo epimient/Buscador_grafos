@@ -45,9 +45,10 @@ describe('embedMetadata', () => {
     expect(args).toContain('-overwrite_original');
     expect(args).toContain('-EXIF:ImageDescription=A fluffy cat');
     expect(args).toContain('-EXIF:Artist=Corporación Universitaria Americana - VORAEL');
-    expect(args).toContain('-IPTC:Keywords=cat');
-    expect(args).toContain('-IPTC:Keywords=animal');
-    expect(args).toContain('-XMP:Subject=Cat');
+    expect(args).toContain('-XMP:Subject+=cat');
+    expect(args).toContain('-XMP:Subject+=animal');
+    expect(args).toContain('-XMP:Title=Cat');
+    expect(args).toContain('-XMP:Description=Cat');
   });
 
   it('skips description/subject/tags when null', async () => {
@@ -68,6 +69,7 @@ describe('embedMetadata', () => {
     expect(args).not.toContain(expect.stringContaining('ImageDescription'));
     expect(args).not.toContain(expect.stringContaining('Keywords'));
     expect(args).not.toContain(expect.stringContaining('Subject'));
+    expect(args).not.toContain(expect.stringContaining('Title'));
     // Artist is always set.
     expect(args).toContain('-EXIF:Artist=Corporación Universitaria Americana - VORAEL');
   });

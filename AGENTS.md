@@ -30,9 +30,12 @@ Data comes from PostgreSQL (`generated_images` table) and DigitalOcean Spaces (S
 - **API is CommonJS** (`"type": "commonjs"`). Web is ESM (`"type": "module"`). Do not mix import styles.
 - **API entry guard**: `index.ts` only calls `app.listen` when `require.main === module`. When imported for tests, it exports `app` + `bootGraph()` without starting a server.
 - **Mock mode**: set `DB_MOCK=true` in `apps/api/.env`. Uses `mockData.ts` (30 images) + `test-images/` (10 .webp placeholders). All routes work — DB and S3 are bypassed. This is the default for local dev and tests.
-- **Graph engine**: `SEARCH_ENGINE=graph` (default) uses in-memory Graphology. `SEARCH_ENGINE=sql` falls back to PostgreSQL. Graph refreshes every 60s via atomic swap.
+- **Graph engine**: `SEARCH_ENGINE=graph` (default) uses in-memory Graphology. `SEARCH_ENGINE=sql` falls back to PostgreSQL.
+  - **Incremental refresh**: every `GRAPH_REFRESH_MS` (default 60000) the store fetches only rows newer than a watermark (keyset on `(created_at, id)`) and applies them in-memory (`applyDelta`). Every `GRAPH_FULL_RELOAD_MS` (default 600000) it does a full rebuild + refetch to reconcile (deltas can't detect deletes/edits).
+  - **Precision warning**: `created_at` is read via `to_char(created_at AT TIME ZONE 'UTC', ... .US ...)` to keep microsecond precision. Do NOT round-trip through `new Date().toISOString()`, which truncates to ms and makes the watermark lag (each tick re-fetches the newest row forever). `computeWatermark` preserves strings as-is.
 - **Tests require no external services** — they use `mockData.ts` and `test/fixtures/images.ts`. No DB, no S3, no exiftool needed.
 - **ExifTool**: optional. `METADATA_EMBED=exiftool` enables metadata embedding in downloads. Config in `apps/api/.ExifTool_config` defines custom XMP namespace `XMP-vorael:*`. If exiftool is missing, degrades silently.
+- **Semantic search**: `SEARCH_MODE=lexical` (default) | `semantic` | `hybrid`. Requires Ollama local (default `http://127.0.0.1:11434`, model `EMBED_MODEL` default `bge-m3`, dims 1024) and the `image_embeddings` table (id, embedding real[], model). Index lives in memory (`apps/api/src/embeddings.ts`, `loadSemanticIndex`), loaded lazily; query embedding is cached with LRU. Degrades to lexical if Ollama/table missing. Build embeddings with `pnpm embeddings:build` (resumable, batches of 32). **Precision warning**: the RAM index is Float32Array — do not mutate it in place; `cosine`/`searchSemantic`/`rrfFuse` are pure and tested in `test/embeddings.test.ts`.
 - **sigma.js node types**: Do NOT pass custom types (`tag`, `style`, `mood`, etc.) to sigma's graph. Sigma only recognizes built-in types (`circle`, `square`, etc.). Use color for visual differentiation instead.
 - **Sub-route `/vorael/`**: hardcoded in 4 places — `vite.config.ts` (base), `main.tsx` (BrowserRouter basename), `deploy/nginx-vorael.conf` (location), `index.html` (favicon href). Changing one without the others breaks the app.
 
@@ -59,11 +62,13 @@ Tests live in `apps/api/test/`:
 - `exif.test.ts` — metadata embedding (requires exiftool)
 - `metadata.test.ts` — metadata roundtrip (requires exiftool)
 
-110 tests total (2 fallos conocidos en `metadata.test.ts` si exiftool no está configurado). Run with `pnpm test` from root or `npx vitest run` from `apps/api/`.
+120→nah, real count: 133 tests total, all passing (`metadata.test.ts`/`exif.test.ts` cubren el round-trip ExifTool si el binario y `.ExifTool_config` existen; degradan a fallback si no). Run with `pnpm test` from root or `npx vitest run` from `apps/api/`.
 
 ## Key files
 
 - `apps/api/src/graph.ts` — Graph engine, GraphStore singleton, exportSnapshot
+- `apps/api/src/embeddings.ts` — Semantic index (cosine, searchSemantic, RRF, LRU cache)
+- `apps/api/src/scripts/embeddings-build.ts` — one-time build of image_embeddings (resumable)
 - `apps/api/src/metadata.ts` — ExifTool wrapper (embed + readImageMetadata)
 - `apps/api/src/db.ts` — pg pool + mock-aware query()
 - `apps/api/src/mockData.ts` — 30 test images with TEST_URL/TEST_KEY helpers
