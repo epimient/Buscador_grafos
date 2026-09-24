@@ -3,7 +3,7 @@ import type { Server } from 'http';
 import type { AddressInfo } from 'net';
 
 // Mock data must be hoisted alongside vi.mock.
-const { mockSnapshot, mockSearch, mockScoreSearch, mockRelated, mockTagsList, mockTagImages, mockFilters, mockStats } =
+const { mockSnapshot, mockSearch, mockScoreSearch, mockRelated, mockTagsList, mockTagImages, mockFilters, mockStats, mockExportGraph } =
   vi.hoisted(() => ({
     mockSnapshot: {
       graph: { neighbors: vi.fn().mockReturnValue([]) },
@@ -63,6 +63,10 @@ const { mockSnapshot, mockSearch, mockScoreSearch, mockRelated, mockTagsList, mo
       topMoods: [{ value: 'Calm', count: 3 }],
       topTags: [{ tag: 'cat', count: 4 }],
     }),
+    mockExportGraph: vi.fn().mockReturnValue({
+      nodes: [{ id: 'g1', type: 'image', label: 'g1', size: 3, color: '#6366f1' }],
+      edges: [],
+    }),
   }));
 
 vi.mock('../src/db', () => ({
@@ -74,10 +78,28 @@ vi.mock('../src/s3', () => ({
   s3: { send: vi.fn() },
 }));
 
+// Stub de la búsqueda semántica: la ruta hace import() dinámico de
+// '../embeddings'. Mantenemos searchSemantic/rrfFuse reales (importOriginal) y
+// controlamos solo el índice y el embedding de la query.
+const sem = vi.hoisted(() => ({
+  getSemanticIndex: vi.fn(),
+  embedQuery: vi.fn(),
+}));
+
+vi.mock('../src/embeddings', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('../src/embeddings')>();
+  return {
+    ...mod,
+    getSemanticIndex: sem.getSemanticIndex,
+    embedQuery: sem.embedQuery,
+  };
+});
+
 vi.mock('../src/graph', () => ({
   graphStore: {
     ready: true,
     snapshot: mockSnapshot,
+    exportGraph: mockExportGraph,
   },
   search: mockSearch,
   scoreSearch: mockScoreSearch,
@@ -100,6 +122,15 @@ beforeEach(async () => {
   vi.clearAllMocks();
   server = app.listen(0, '127.0.0.1');
   await new Promise<void>((r) => server.on('listening', r));
+  // Defaults para el stub semántico: si un request entra en semantic/hybrid
+  // (config SEARCH_MODE), degrada a lexical sin tocar Ollama.
+  sem.getSemanticIndex.mockResolvedValue({
+    vectors: new Map(),
+    model: 'bge-m3',
+    dim: 0,
+    builtAt: new Date(),
+  });
+  sem.embedQuery.mockResolvedValue(null);
 });
 
 afterEach(async () => {
@@ -139,6 +170,89 @@ describe('GET /api/search', () => {
     expect(res.status).toBe(200);
     expect(res.body.items).toEqual([]);
     expect(res.body.total).toBe(0);
+  });
+
+  it('returns the induced subgraph when graph=1', async () => {
+    const res = await request(baseUrl()).get('/api/search?q=cat&graph=1');
+    expect(res.status).toBe(200);
+    expect(res.body.graph).toBeDefined();
+    expect(res.body.graph.nodes).toHaveLength(1);
+    expect(res.body.graph.nodes[0]).toHaveProperty('size');
+    // Se debe haber pedido el subgrafo sobre ids (top del ranking).
+    expect(mockExportGraph).toHaveBeenCalledWith(
+      expect.objectContaining({ ids: ['g1'], hops: 1 }),
+    );
+  });
+
+  it('omits graph when graph falsy', async () => {
+    const res = await request(baseUrl()).get('/api/search?q=cat');
+    expect(res.status).toBe(200);
+    expect(res.body.graph).toBeUndefined();
+    expect(mockExportGraph).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/search con modo semantic/hybrid', () => {
+  const byId = mockSnapshot.byId as unknown as Map<string, { id: string; s3_url: string; tags: string[] }>;
+
+  const makeIndex = () => ({
+    vectors: new Map<string, Float32Array>([
+      ['g1', Float32Array.from([1, 0, 0, 0])],
+      ['s1', Float32Array.from([0.9, 0.1, 0, 0])],
+      ['s2', Float32Array.from([0, 1, 0, 0])],
+    ]),
+    model: 'bge-m3',
+    dim: 4,
+    builtAt: new Date(),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sem.getSemanticIndex.mockResolvedValue(makeIndex() as never);
+    sem.embedQuery.mockResolvedValue(Float32Array.from([1, 0, 0, 0]) as never);
+    byId.set('s1', { id: 's1', s3_url: 'https://example.com/s1.webp', tags: ['car'] });
+    byId.set('s2', { id: 's2', s3_url: 'https://example.com/s2.webp', tags: ['car'] });
+  });
+
+  afterEach(() => {
+    byId.delete('s1');
+    byId.delete('s2');
+  });
+
+  it('hybrid fusiona el ranking léxico con el semántico vía RRF', async () => {
+    // lexical = ['g1'] (mockScoreSearch). Semántico: g1 (cos 1), s1 (cos ~0.99).
+    const res = await request(baseUrl()).get('/api/search?q=car&mode=hybrid');
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('hybrid');
+    expect(sem.getSemanticIndex).toHaveBeenCalled();
+    expect(sem.embedQuery).toHaveBeenCalledWith('car');
+    // RRF: g1 aparece en ambos rankings -> score compuesto mayor.
+    expect(res.body.items[0].id).toBe('g1');
+    // total = ranking RRF materializado, no el total léxico (fix de paginación).
+    expect(res.body.total).toBe(2);
+  });
+
+  it('semantic usa solo el ranking por coseno y total = top-k materializado', async () => {
+    const res = await request(baseUrl()).get('/api/search?q=car&mode=semantic');
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('semantic');
+    expect(res.body.items.map((i: { id: string }) => i.id)).toEqual(['g1', 's1']);
+    expect(res.body.total).toBe(2);
+  });
+
+  it('degrade a lexical si el índice está vacío o Ollama no responde', async () => {
+    sem.getSemanticIndex.mockResolvedValue({
+      vectors: new Map(),
+      model: 'bge-m3',
+      dim: 0,
+      builtAt: new Date(),
+    } as never);
+    sem.embedQuery.mockResolvedValue(null);
+    const res = await request(baseUrl()).get('/api/search?q=car&mode=hybrid');
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('hybrid');
+    expect(res.body.items.map((i: { id: string }) => i.id)).toEqual(['g1']);
+    expect(res.body.total).toBe(1); // total léxico
   });
 });
 

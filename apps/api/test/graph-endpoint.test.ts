@@ -70,6 +70,36 @@ describe('GET /api/graph', () => {
     expect(ids).toContain(firstImg);
   });
 
+  it('returns induced subgraph for ids', async () => {
+    const imgs = sampleRows.slice(0, 3).map((r) => r.id);
+    const res = await request(app).get(`/api/graph?ids=${imgs.join(',')}&hops=1`);
+    expect(res.status).toBe(200);
+    expect(res.body.nodes.length).toBeGreaterThan(0);
+    // Todos los ids pedidos deben estar (los 3 son imágenes).
+    for (const id of imgs) {
+      expect(res.body.nodes.map((n: any) => n.id)).toContain(id);
+    }
+    // Las aristas solo conectan nodos del subgrafo.
+    const present = new Set(res.body.nodes.map((n: any) => n.id));
+    for (const e of res.body.edges) {
+      expect(present.has(e.source)).toBe(true);
+      expect(present.has(e.target)).toBe(true);
+    }
+  });
+
+  it('metadata node size in ids mode counts sharing images', async () => {
+    const res = await request(app).get(
+      `/api/graph?ids=${sampleRows[0].id},${sampleRows[1].id}&hops=1&types=tag`,
+    );
+    expect(res.status).toBe(200);
+    const tags = res.body.nodes;
+    expect(tags.length).toBeGreaterThan(0);
+    for (const t of tags) {
+      expect(t.size).toBeGreaterThanOrEqual(1);
+      expect(t.size).toBeLessThanOrEqual(2);
+    }
+  });
+
   it('returns empty when no types match', async () => {
     const res = await request(app).get('/api/graph?types=nonexistent');
     expect(res.status).toBe(200);

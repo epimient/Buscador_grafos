@@ -28,6 +28,7 @@
  */
 import Graph from 'graphology';
 import type { ImageRow } from './types';
+import { meaningfulTerms } from './stopwords';
 
 // ── Tipos de apoyo ──────────────────────────────────────────────────────────
 
@@ -405,25 +406,22 @@ export interface ScoredSearch {
 export function scoreSearch(
   snap: GraphSnapshot,
   q: string,
-  _opts: { page?: number; limit?: number } = {},
+  opts: { page?: number; limit?: number; minMatched?: number; topK?: number } = {},
 ): ScoredSearch {
   if (!q.trim()) {
     return { ids: [], total: 0 };
   }
 
-  // Términos únicos (en minúsculas), para que una palabra repetida no domine.
-  const terms = [
-    ...new Set(
-      q
-        .toLowerCase()
-        .split(/\s+/)
-        .map((t) => t.trim())
-        .filter((t) => t.length > 0),
-    ),
-  ];
+  // Términos significativos (sin stopwords), en minúsculas y sin duplicados.
+  // Las stopwords no cuentan para la cobertura: "persona parada frente a una
+  // sala de control" solo exige match sobre persona/parada/sala/control.
+  const terms = meaningfulTerms(q);
 
-  // Cobertura mínima: queries cortas → cualquier match; párrafos → ≥ 50%.
-  const minMatched = terms.length <= 3 ? 1 : Math.ceil(terms.length * 0.5);
+  // Cobertura mínima: queries cortas (≤2 términos) → cualquier match;
+  // párrafos → ≥ 75% de los términos significativos. El 75% pide ~toda la
+  // frase ("persona parada frente a sala de control" = 4 términos → exige 3),
+  // lo que descarta matches parciales tipo "sala de espera" (solo sala+persona).
+  const minMatched = opts.minMatched ?? (terms.length <= 2 ? 1 : Math.floor(terms.length * 0.75));
 
   // Calcular score por cobertura para cada imagen.
   // Los tokens por campo vienen precomputados en textIndex (Sets), así que no
@@ -469,7 +467,11 @@ export function scoreSearch(
     return b.id.localeCompare(a.id);
   });
 
-  return { ids: scored.map((s) => s.id), total: scored.length };
+  const ids = scored.map((s) => s.id);
+  if (opts.topK && opts.topK > 0 && ids.length > opts.topK) {
+    return { ids: ids.slice(0, opts.topK), total: scored.length };
+  }
+  return { ids, total: scored.length };
 }
 
 // ── Related ─────────────────────────────────────────────────────────────────
@@ -671,15 +673,38 @@ function nodeLabelFromKey(key: string): string {
 
 function exportSnapshot(
   snap: GraphSnapshot,
-  opts: { types?: string[]; limit?: number; center?: string; hops?: number },
+  opts: { types?: string[]; limit?: number; center?: string; hops?: number; ids?: string[] },
 ): GraphExport {
   const allowedTypes = new Set(opts.types ?? ['image', 'tag', 'style', 'mood', 'useCase', 'color']);
   const limit = opts.limit ?? 200;
   const hops = opts.hops ?? 1;
 
-  // Si hay center, hacer ego-graph.
+  // Si hay ids: subgrafo inducido por el conjunto de imágenes (búsqueda).
+  // Los nodos metadato presentes cuentan con cuántas imágenes del set se
+  // conectan (seedDegree), no con su frecuencia global.
+  const seedSet = new Set(opts.ids ?? []);
   let nodeIds: Set<string>;
-  if (opts.center && snap.graph.hasNode(opts.center)) {
+  if (seedSet.size) {
+    nodeIds = new Set<string>();
+    let frontier = new Set<string>();
+    for (const id of seedSet) {
+      if (!snap.graph.hasNode(id)) continue;
+      nodeIds.add(id);
+      frontier.add(id);
+    }
+    for (let h = 0; h < hops; h++) {
+      const next = new Set<string>();
+      for (const nid of frontier) {
+        for (const neighbor of snap.graph.neighbors(nid)) {
+          if (!nodeIds.has(neighbor)) {
+            nodeIds.add(neighbor);
+            next.add(neighbor);
+          }
+        }
+      }
+      frontier = next;
+    }
+  } else if (opts.center && snap.graph.hasNode(opts.center)) {
     nodeIds = new Set<string>();
     nodeIds.add(opts.center);
     let frontier = new Set([opts.center]);
@@ -702,6 +727,18 @@ function exportSnapshot(
 
   // Construir nodos.
   const nodes: GraphNode[] = [];
+  // Cuando el subgrafo viene de un conjunto de imágenes (ids), el tamaño de
+  // cada metadato es cuántas imágenes del set lo comparten (no su frecuencia
+  // global). seedDegree se llena contando vecinos imagen por nodo.
+  const seedDegree = new Map<string, number>();
+  if (seedSet.size) {
+    for (const id of seedSet) {
+      if (!snap.graph.hasNode(id)) continue;
+      for (const nb of snap.graph.neighbors(id)) {
+        seedDegree.set(nb, (seedDegree.get(nb) ?? 0) + 1);
+      }
+    }
+  }
   for (const nid of nodeIds) {
     const attrs = snap.graph.getNodeAttributes(nid);
     const type: GraphNode['type'] = attrs.type === 'Image' ? 'image'
@@ -712,14 +749,24 @@ function exportSnapshot(
       : 'color';
 
     if (!allowedTypes.has(type)) continue;
+    // En modo ids (subgrafo de búsqueda) un metadato debe conectar al menos
+    // 2 imágenes del set — si es único en la búsqueda no "une" nada y solo
+    // añade ruido visual. Las imágenes siempre entran.
+    if (seedSet.size && type !== 'image' && (seedDegree.get(nid) ?? 0) < 2) continue;
 
     const label = type === 'image'
       ? (snap.byId.get(nid)?.subject ?? nid)
       : (attrs.name ?? attrs.hex ?? nid);
 
-    const size = type === 'tag'
-      ? (snap.tagIndex.get(label)?.size ?? 1)
-      : Math.max(1, snap.graph.degree(nid));
+    const size = type === 'image'
+      ? Math.max(1, snap.graph.degree(nid))
+      : seedSet.size
+        // En modo ids, el tamaño refleja cuántas imágenes del set comparten
+        // este metadato — el nodo "une" tantas imágenes de la búsqueda.
+        ? (seedDegree.get(nid) ?? 1)
+        : (snap.tagIndex.get(label)?.size ?? snap.styleIndex.get(label)?.size
+          ?? snap.moodIndex.get(label)?.size ?? snap.useCaseIndex.get(label)?.size
+          ?? snap.colorIndex.get(label)?.size ?? 1);
 
     nodes.push({
       id: nid,
@@ -877,7 +924,7 @@ export class GraphStore {
   }
 
   /** Serializa el grafo para el endpoint /api/graph. */
-  exportGraph(opts: { types?: string[]; limit?: number; center?: string; hops?: number } = {}): GraphExport {
+  exportGraph(opts: { types?: string[]; limit?: number; center?: string; hops?: number; ids?: string[] } = {}): GraphExport {
     if (!this._snapshot) return { nodes: [], edges: [] };
     return exportSnapshot(this._snapshot, opts);
   }

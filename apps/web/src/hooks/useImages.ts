@@ -1,11 +1,13 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
+  fetchHealth,
   fetchImage,
   fetchImages,
   fetchRelated,
   fetchTagImages,
   searchImages,
   type ImageListParams,
+  type SearchMode,
 } from '@/services/api';
 import type { ActiveFilters } from '@/types/image';
 
@@ -35,13 +37,24 @@ export function useRelatedImages(id: string) {
   });
 }
 
-export function useInfiniteSearch(q: string, limit = 24) {
+// `mode` undefined = el servidor decide (config SEARCH_MODE). Se incluye en el
+// queryKey para que cambiar el toggle re-haga la búsqueda.
+export function useInfiniteSearch(q: string, limit = 24, mode?: SearchMode) {
   return useInfiniteQuery({
-    queryKey: ['search', q, limit],
-    queryFn: ({ pageParam }) => searchImages({ q, page: pageParam as number, limit }),
+    queryKey: ['search', q, mode ?? null, limit],
+    queryFn: ({ pageParam }) => searchImages({ q, page: pageParam as number, limit, mode }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.hasMore ? last.page + 1 : undefined),
     enabled: q.trim().length > 0,
+  });
+}
+
+/** Config de búsqueda del servidor (modo y modelo por defecto) para inicializar el toggle. */
+export function useSearchConfig() {
+  return useQuery({
+    queryKey: ['health', 'search'],
+    queryFn: fetchHealth,
+    staleTime: 60_000,
   });
 }
 

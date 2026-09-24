@@ -110,6 +110,33 @@ describe('searchSemantic', () => {
     };
     expect(searchSemantic(empty, Float32Array.from([1, 0, 0]), 5)).toEqual([]);
   });
+
+  it('descarta resultados con coseno bajo minScore', () => {
+    const index = makeIndex([
+      ['g1', [1, 0, 0]], // coseno 1.0
+      ['g2', [0.9, 0.1, 0]], // coseno ~0.994
+      ['g3', [0.1, 0, 0.8]], // coseno ~0.124 < 0.25
+    ]);
+    const qVec = Float32Array.from([1, 0, 0]);
+    const top = searchSemantic(index, qVec, 10, 0.25);
+    const ids = top.map((r) => r.id);
+    expect(ids).toContain('g1');
+    expect(ids).toContain('g2');
+    expect(ids).not.toContain('g3');
+  });
+
+  it('minScore por defecto usa config.semantic.minScore (ruido excluido)', () => {
+    const index = makeIndex([
+      ['g1', [1, 0, 0]], // coseno 1.0
+      ['ruido', [0.3, 0.9, 0.1]], // coseno ~0.31 < default 0.65 → no entra
+      ['ruido2', [-0.5, 0.8, 0.2]], // coseno negativo → no entra
+    ]);
+    const top = searchSemantic(index, Float32Array.from([1, 0, 0]), 10);
+    const ids = top.map((r) => r.id);
+    expect(ids).toContain('g1');
+    expect(ids).not.toContain('ruido');
+    expect(ids).not.toContain('ruido2');
+  });
 });
 
 describe('EmbeddingCache', () => {

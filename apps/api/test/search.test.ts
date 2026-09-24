@@ -181,4 +181,17 @@ describe('search coverage (paragraphs)', () => {
     expect(result.total).toBeGreaterThanOrEqual(1);
     expect(result.items.every((r) => r.tags?.includes('cat'))).toBe(true);
   });
+
+  it('stopwords do not change the result set (coverage counts meaningful terms only)', () => {
+    const plain = search(snap, 'cat windowsill');
+    const padded = search(snap, 'la una de un cat windowsill frente a');
+    expect(padded.items.map((r) => r.id)).toEqual(plain.items.map((r) => r.id));
+    expect(padded.total).toBe(plain.total);
+  });
+
+  it('stopwords alone do not match a long paragraph (no single-token OR leaks)', () => {
+    // Párrafo cuyo único token en común con imagenes es una stopword.
+    const result = search(snap, 'un la de el para frente');
+    expect(result.total).toBe(0);
+  });
 });

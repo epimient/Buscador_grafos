@@ -4,6 +4,7 @@ import path from 'path';
 import { config } from './config';
 import { pingDb } from './db';
 import { graphStore, fetchAllRows, fetchDeltaRows } from './graph';
+import { warmSemanticIndex, startSemanticRefresh } from './embeddings';
 import type { ImageRow } from './types';
 import type { GraphStore } from './graph';
 import { imagesRouter } from './routes/images';
@@ -44,6 +45,10 @@ app.get('/api/health', (_req, res) => {
           buildMs: snap.buildMs,
         }
       : null,
+    search: {
+      mode: config.semantic.mode,
+      model: config.semantic.model,
+    },
   });
 });
 
@@ -98,6 +103,15 @@ export async function bootGraph(): Promise<void> {
   console.log(
     `[graph] refresh every ${config.graph.refreshMs}ms, full reload every ${config.graph.fullReloadMs}ms`,
   );
+
+  // Warmup del índice semántico en el boot: el primer request en modo
+  // semantic/hybrid no debe pagar la carga de ~53k vectores (~21s), que
+  // supera el timeout del cliente. La recarga periódica sigue la cadencia
+  // del full reload del grafo para recoger embeddings nuevos sin reiniciar.
+  if (!config.mock && config.semantic.mode !== 'lexical') {
+    warmSemanticIndex();
+    startSemanticRefresh(config.graph.fullReloadMs);
+  }
 }
 
 // Auto-start only when run directly (not imported for tests).

@@ -49,6 +49,7 @@ export const config = {
     model: optional('EMBED_MODEL', 'bge-m3'),
     server: optional('EMBED_SERVER', 'http://127.0.0.1:11434'),
     dim: Number(optional('EMBED_DIM', '1024')),
+    minScore: Number(optional('SEMANTIC_MIN_SCORE', '0.65')),
   },
   metadata: {
     embed: optional('METADATA_EMBED', 'none') as 'exiftool' | 'none',

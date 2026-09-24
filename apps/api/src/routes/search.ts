@@ -4,10 +4,6 @@ import { config } from '../config';
 
 export const searchRouter = Router();
 
-// Cache del índice semántico (in-memory). Se carga perezosamente en el primer
-// request en modo semantic/hybrid y se mantiene mientras el proceso viva.
-let semIndexCache: import('../embeddings').SemanticIndex | null = null;
-
 // GET /api/search?q=...&page=1&limit=24&mode=hybrid
 searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -21,9 +17,14 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         : config.semantic.mode;
 
     if (!q) {
-      res.json({ items: [], page, limit, total: 0, hasMore: false, q });
+      res.json({ items: [], page, limit, total: 0, hasMore: false, q, mode });
       return;
     }
+
+    // En graph=1, además de los items devolvemos el subgrafo inducido por el
+    // top-100 del ranking actual (lo que el frontend pinta con sigma). El
+    // tamaño de cada nodo metadato = cuántas imágenes del set lo comparten.
+    const wantGraph = req.query.graph === '1' || req.query.graph === 'true';
 
     if (config.graph.engine === 'graph' && graphStore.ready) {
       const snap = graphStore.snapshot!;
@@ -34,28 +35,48 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
       // Modo hybrid/semantic requieren el índice y Ollama; si cualquiera falla
       // o el índice está vacío, degradamos a lexical sin romper la request.
       if (mode !== 'lexical') {
-        const { loadSemanticIndex, embedQuery, searchSemantic, rrfFuse } =
+        const { getSemanticIndex, embedQuery, searchSemantic, rrfFuse } =
           await import('../embeddings');
-        if (!semIndexCache) semIndexCache = await loadSemanticIndex();
+        const semIndex = await getSemanticIndex();
         const qVec = await embedQuery(q);
 
-        if (semIndexCache && semIndexCache.dim > 0 && qVec) {
-          const semantic = searchSemantic(semIndexCache, qVec, 100);
+        if (semIndex && semIndex.dim > 0 && qVec) {
+          // SEMANTIC_MIN_SCORE es un umbral anti-ruido SOLO para el feed
+          // semántico del RRF (hybrid). En semantic puro no se aplica:
+          // allí el usuario quiere los top-k directos, y con bge-m3 casi
+          // ningún vector pasa 0.65 — filtrarlos dejaba la búsqueda vacía.
+          const minScore = mode === 'hybrid' ? config.semantic.minScore : 0;
+          const semantic = searchSemantic(semIndex, qVec, 100, minScore);
           if (mode === 'semantic') {
             rankedIds = semantic.map((s) => s.id);
           } else {
+            // RRF se alimenta solo con los mejores de cada lado: el top-100
+            // léxico (el resto es ruido de baja cobertura) + el top-100
+            // semántico ya filtrado por SEMANTIC_MIN_SCORE.
             rankedIds = rrfFuse(
-              lexical.ids.map((id) => ({ id })),
+              lexical.ids.slice(0, 100).map((id) => ({ id })),
               semantic.map((s) => ({ id: s.id })),
             ).map((r) => r.id);
           }
         }
       }
 
-      const total = mode === 'semantic' ? rankedIds.length : lexical.total;
+      // En semantic/hybrid el ranking ya es el conjunto completo materializado
+      // (RRF o top-k semántico), así que su longitud es el total real.
+      const total = mode === 'lexical' ? lexical.total : rankedIds.length;
       const offset = (page - 1) * limit;
       const slice = rankedIds.slice(offset, offset + limit);
       const items = slice.map((id) => snap.byId.get(id)!).filter(Boolean);
+
+      const graph = wantGraph
+        ? graphStore.exportGraph({
+            // El subgrafo de la búsqueda se arma sobre lo más relevante del
+            // ranking; cosa de no dibujar los 12k de la query corta.
+            ids: rankedIds.slice(0, 100),
+            hops: 1,
+            limit: 500,
+          })
+        : undefined;
 
       res.json({
         items,
@@ -65,6 +86,7 @@ searchRouter.get('/', async (req: Request, res: Response, next: NextFunction) =>
         hasMore: offset + items.length < total,
         q,
         mode,
+        graph,
       });
       return;
     }

@@ -76,6 +76,11 @@ export async function loadSemanticIndex(): Promise<SemanticIndex> {
       dim = arr.length;
       vectors.set(row.id as string, arr);
     }
+    if (config.semantic.dim > 0 && dim !== config.semantic.dim) {
+      console.warn(
+        `[semantic] las filas tienen dims=${dim} pero EMBED_DIM=${config.semantic.dim} — se usará ${dim}`,
+      );
+    }
     console.log(
       `[semantic] índice cargado: ${vectors.size} vectores (dims=${dim}, model=${model}) en ${Date.now() - t0}ms`,
     );
@@ -84,6 +89,61 @@ export async function loadSemanticIndex(): Promise<SemanticIndex> {
     console.warn(`[semantic] índice vacío (¿tabla inexistente?): ${(err as Error).message}`);
     return { vectors: new Map(), model, dim: 0, builtAt: new Date() };
   }
+}
+
+// ── Cache compartida del índice (warmup + refresh) ─────────────────────────
+//
+// warmSemanticIndex() se dispara en el boot para que el primer request en modo
+// semantic/hybrid no pague la carga de 53k vectores (~21s > timeout del cliente).
+// startSemanticRefresh() recarga el índice con la misma cadencia que el full
+// reload del grafo (GRAPH_FULL_RELOAD_MS), para que los embeddings nuevos
+// aparezcan sin reiniciar el proceso.
+
+let sharedIndex: SemanticIndex | null = null;
+let sharedLoading: Promise<void> | null = null;
+
+async function ensureLoaded(): Promise<void> {
+  try {
+    sharedIndex = await loadSemanticIndex();
+  } catch (err) {
+    // loadSemanticIndex ya es fail-open; esto es puramente defensivo.
+    console.warn(`[semantic] carga del índice falló: ${(err as Error).message}`);
+  } finally {
+    sharedLoading = null;
+  }
+}
+
+/** Dispara la carga en segundo plano (no bloquea el boot). Idempotente. */
+export function warmSemanticIndex(): void {
+  if (sharedIndex || sharedLoading) return;
+  sharedLoading = ensureLoaded();
+}
+
+/** Devuelve el índice compartido, cargándolo si todavía no se cargó. */
+export async function getSemanticIndex(): Promise<SemanticIndex | null> {
+  warmSemanticIndex();
+  if (sharedLoading) await sharedLoading;
+  return sharedIndex;
+}
+
+/**
+ * Recarga periódica del índice. El timer queda desvinculado (unref) para que
+ * no sostenga vivo el proceso en tests/CLI.
+ */
+export function startSemanticRefresh(intervalMs: number): NodeJS.Timeout {
+  const timer = setInterval(() => {
+    const t0 = Date.now();
+    loadSemanticIndex()
+      .then((idx) => {
+        sharedIndex = idx;
+        console.log(
+          `[semantic] índice refrescado (${idx.vectors.size} vectores) en ${Date.now() - t0}ms`,
+        );
+      })
+      .catch(() => {});
+  }, Math.max(intervalMs, 10_000));
+  timer.unref();
+  return timer;
 }
 
 /** Similitud coseno entre dos vectores de igual longitud. */
@@ -127,18 +187,25 @@ export async function embedQuery(text: string): Promise<Float32Array | null> {
   }
 }
 
-/** Top-k por similitud coseno. Devuelve ids ordenados desc + score. */
+/**
+ * Top-k por similitud coseno. Devuelve ids ordenados desc + score.
+ * `minScore` descarta resultados con coseno por debajo del umbral: el coseno
+ * positivo fue demasiado laxo (cualquier par de puntos con ángulo < 90° entraba,
+ * trayendo ruido como "juez"/"ventanilla"), así que solo sobreviven los matches
+ * realmente relacionados. Default desde config.semantic.minScore (SEMANTIC_MIN_SCORE).
+ */
 export function searchSemantic(
   index: SemanticIndex,
   qVec: Float32Array,
   k: number = 100,
+  minScore: number = config.semantic.minScore,
 ): { id: string; score: number }[] {
   const results: { id: string; score: number }[] = [];
   if (index.dim === 0 || qVec.length !== index.dim) return results;
 
   for (const [id, vec] of index.vectors) {
     const score = cosine(qVec, vec);
-    if (score > 0) results.push({ id, score });
+    if (score > minScore) results.push({ id, score });
   }
 
   results.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));

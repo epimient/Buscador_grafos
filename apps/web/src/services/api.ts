@@ -60,10 +60,50 @@ export interface SearchParams {
   q: string;
   page?: number;
   limit?: number;
+  mode?: SearchMode;
+  /** Si es 1, la respuesta trae el subgrafo de la búsqueda en `graph`. */
+  graph?: boolean;
 }
 
-export async function searchImages(params: SearchParams): Promise<PaginatedImages & { q: string }> {
-  const { data } = await api.get<PaginatedImages & { q: string }>('/api/search', { params });
+/** Modes accepted by GET /api/search. */
+export type SearchMode = 'lexical' | 'semantic' | 'hybrid';
+
+export function isSearchMode(v: unknown): v is SearchMode {
+  return v === 'lexical' || v === 'semantic' || v === 'hybrid';
+}
+
+export interface SearchResponse extends PaginatedImages {
+  q: string;
+  mode: string;
+  /** Presente cuando se pidió con graph=1. */
+  graph?: GraphExport;
+}
+
+export async function searchImages(params: SearchParams): Promise<SearchResponse> {
+  const { data } = await api.get<SearchResponse>('/api/search', { params });
+  return data;
+}
+
+export interface HealthSearch {
+  mode: SearchMode;
+  model: string;
+}
+
+export interface HealthResponse {
+  ok: boolean;
+  ts: string;
+  graph: {
+    rows: number;
+    nodes: number;
+    edges: number;
+    builtAt: string;
+    buildMs: number;
+  } | null;
+  search?: HealthSearch;
+}
+
+export async function fetchHealth(): Promise<HealthResponse> {
+  const { data } = await api.get<HealthResponse>('/api/health');
   return data;
 }
 

@@ -423,6 +423,7 @@ El usuario **nunca ve un error 500** por culpa de Ollama.
 | `EMBED_MODEL` | Modelo de embeddings | `bge-m3` | `bge-m3` (1024) / `nomic-embed-text` (768) |
 | `EMBED_SERVER` | Dónde corre Ollama | `http://127.0.0.1:11434` | URL de Ollama |
 | `EMBED_DIM` | Dimensiones del modelo | `1024` | coincide con el modelo |
+| `SEMANTIC_MIN_SCORE` | Umbral de coseno para resultados semánticos | `0.65` | `0..1` |
 
 Ejemplo en `apps/api/.env` para activar el modo híbrido por defecto:
 
