@@ -1,3 +1,15 @@
+# VORAEL — stack completo: PostgreSQL + API (Express) + Web (Nginx).
+#
+# Nota de red (importante): `api` y `web` usan `network_mode: host` a propósito:
+#   - El .env apunta a localhost:5433 (PostgreSQL, publicado por docker-proxy),
+#     127.0.0.1:11434 (Ollama, que SOLO escucha en loopback del host) y
+#     127.0.0.1:3001 — con host network todo eso es directo, sin overrides.
+#   - Con red bridge Ollama quedaría inalcanzable (está en 127.0.0.1) y la
+#     búsqueda semántica degradaría a léxica en silencio.
+# El API no se expone a la LAN (HOST=127.0.0.1 por defecto en config.ts);
+# el frontend queda en http://localhost:5173/vorael/.
+#
+#   sudo docker compose up -d --build
 services:
   postgres:
     image: postgres:16
@@ -11,6 +23,59 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./deploy/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vorael -d generated_images"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: vorael-api
+    network_mode: host
+    # Credenciales S3/DB: archivo del host, NUNCA dentro de la imagen.
+    # Con host network, DB_HOST=localhost del .env funciona tal cual.
+    env_file:
+      - apps/api/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # node:22-slim no trae curl; global fetch sí (Node >= 18).
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 9
+      start_period: 90s # grafo (~17s) + índice semántico (~24s)
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: vorael-web
+    network_mode: host # nginx escucha :5173 directo en el host, sin mapeo
+    depends_on:
+      api:
+        # started, no healthy: si el API falla el healthcheck, Nginx igual
+        # debe servir el SPA (y /vorael/api/ responde 502 hasta que vuelva).
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/vorael/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
 
 volumes:
   pgdata:

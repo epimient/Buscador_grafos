@@ -1,0 +1,19 @@
+# Contexto de build de Docker (raíz del monorepo).
+# Solo excluido lo que ensucia o pesa.
+#
+# OJO: los comentarios van SOLO al inicio de línea; un "#" a mitad de línea
+# se toma como parte del patrón.
+#
+# apps/web/.env* se INCLUYE a propósito: el build de Vite necesita
+# .env.production (VITE_API_URL=/vorael).
+node_modules
+**/node_modules
+**/dist
+.git
+# credenciales S3/DB: nunca en la imagen (compose lo inyecta con env_file)
+apps/api/.env
+test-images
+test-images-real
+release
+**/*.log
+.DS_Store
