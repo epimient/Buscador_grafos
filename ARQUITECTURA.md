@@ -38,8 +38,7 @@ Producción: **https://n8n.americana.edu.co/vorael/**
 | Data fetching | TanStack Query | 5.x | Cache, revalidación, infinite scroll |
 | Animaciones | Framer Motion | — | Transiciones suaves |
 | Iconos | lucide-react | — | Iconografía ligera |
-| Grafo interactivo | Sigma.js | 3.x | Renderizado WebGL de grafos |
-| Grafo (datoss) | Graphology | 0.26.x | Estructura de datos para sigma |
+| Grafo interactivo | vis-network (vis.js) | 10.x | Renderizado interactivo de grafos sobre canvas |
 | HTTP client | Axios | — | Requests con timeout, interceptores |
 | Routing | React Router | 6.x | SPA routing con basename |
 
@@ -62,7 +61,7 @@ Producción: **https://n8n.americana.edu.co/vorael/**
 ```mermaid
 flowchart TD
     Browser[Navegador] --> Nginx[Nginx\nn8n.americana.edu.co\nHTTPS 443]
-    Nginx --> |"/vorael/*\nstatic files"| SPA[React SPA - Vite\nTailwind + Sigma]
+    Nginx --> |"/vorael/*\nstatic files"| SPA[React SPA - Vite\nTailwind + vis-network]
     Nginx --> |"/vorael/api/*\nproxy_pass"| API[Express API :3001\npg pool + Sharp]
     API --> PostgreSQL[(PostgreSQL\ngenerated_images)]
     API --> S3[DigitalOcean Spaces - S3\nbucket n8ns3]
@@ -103,7 +102,7 @@ flowchart TD
         SPA --> GALL[Gallery: grid con scroll infinito + filtros]
         SPA --> SEARCH[Search: resultados puntuados por relevancia]
         SPA --> DETAIL[ImageDetail: prompts, paleta, descarga]
-        SPA --> GRAPH[Graph: red interactiva con sigma.js WebGL]
+        SPA --> GRAPH[Graph: red interactiva con vis-network sobre canvas]
         SPA --> TAGS[Tags, Stats, Related]
         SPA --> AXIOS[Todo via axios -> proxy Vite -> API Express]
     end
@@ -129,6 +128,29 @@ sequenceDiagram
     E-->>A: archivo modificado
     A-->>B: binario (image/webp)\nContent-Disposition: att.
 ```
+
+### 2.4 Stack Docker completo
+
+`docker-compose.yml` levanta las tres piezas juntas con
+`sudo docker compose up -d --build`:
+
+| Servicio | Imagen | Puerto | Nota |
+|---|---|---|---|
+| `postgres` | `postgres:16` | 5433 (host) | Volumen `pgdata` persistente; esquema en `deploy/init.sql` |
+| `api` | build `apps/api/Dockerfile` | 3001 (loopback) | `env_file: apps/api/.env`, `network_mode: host` |
+| `web` | build `apps/web/Dockerfile` → nginx | 5173 | Sirve el SPA en `/vorael/` y proxea `/vorael/api/` |
+
+**Por qué `network_mode: host` en `api` y `web`:** Ollama escucha solo en
+`127.0.0.1:11434` del host y el API bindea loopback. Con red *bridge*, la búsqueda
+semántica degradaría a léxica en silencio.
+
+**Por qué `graphology` es dependencia de runtime del API:** `src/graph.ts` lo
+importa; en la imagen de producción (`--prod`) debe estar instalado.
+
+El `.env` del API entra por `env_file` (nunca dentro de la imagen: `.dockerignore`
+lo excluye). El build de `web` usa `apps/web/.env.production`
+(`VITE_API_URL=/vorael`). El nginx del contenedor es `deploy/nginx-docker.conf`
+(standalone, `listen 5173`).
 
 ---
 
@@ -224,7 +246,7 @@ Las rutas de búsqueda, tags, filtros, stats y related leen de un grafo en memor
 - **Búsqueda por token-match** con scoring por relevancia
 - **Relaciones multihop** para imágenes relacionadas
 - **Co-ocurrencia de tags** para descubrimiento
-- **Exploración visual** vía grafo interactivo (sigma.js)
+- **Exploración visual** vía grafo interactivo (vis-network)
 
 ### 4.2 Estructura del grafo
 
@@ -261,27 +283,42 @@ Además de Graphology, el motor mantiene:
 
 ### 4.4 Sincronización
 
-- **Arranque:** carga completa de `generated_images`.
-- **Periodicidad:** timer cada `GRAPH_REFRESH_MS` (def. 60s) compara watermark
-  barato (`MAX(created_at)`, `COUNT`). Si cambió → rebuild completo + atomic
-  swap. Nunca se ve un grafo a medias.
-- **Fallback:** mientras no esté listo o ante rebuild fallido, las rutas migradas
-  sirven desde SQL. Se conserva el último snapshot válido.
+- **Arranque:** carga completa de `generated_images` + *warm* del índice semántico
+  (si el modo no es `lexical`).
+- **Refresco incremental:** cada `GRAPH_REFRESH_MS` (def. 60s) se piden solo las
+  filas más nuevas que un watermark (keyset sobre `(created_at, id)`) y se aplican
+  en memoria (`applyDelta`). `created_at` se lee con precisión de microsegundos
+  (`to_char(... .US ...)`) para que el watermark no quede atrás.
+- **Reconciliación completa:** cada `GRAPH_FULL_RELOAD_MS` (def. 600s) rebuild
+  completo + *atomic swap* (los deltas no detectan borrados ni ediciones).
+- **Fallback:** mientras no esté listo o ante un fallo, las rutas sirven desde SQL.
+  Se conserva el último snapshot válido.
 
-### 4.5 Búsqueda con token-match
+### 4.5 Búsqueda con token-match (léxica)
 
-Cada término de la query debe aparecer como **palabra completa** en
-`subject`/`original_prompt`/`enhanced_prompt` (no como subcadena `%q%` que pegaba
-en "categoría"). Tags siguen siendo overlap exacto (array).
+El motor en memoria usa los términos **significativos** de la query: se filtran
+las **stopwords en español** ([`src/stopwords.ts`](apps/api/src/stopwords.ts)), así
+que "de", "la", "frente"… no cuentan como coincidencias. Cada término debe
+aparecer como **palabra completa** en `subject`/`original_prompt`/`enhanced_prompt`
+(no como subcadena `%q%` que pegaba en "categoría"). Los tags siguen siendo
+overlap exacto sobre el array.
 
 | Coincidencia | Puntos |
 |---|---|
-| cada tag que solapa (`tags && terms`) | 3 |
+| tag que coincide (plural mínimo) | 4 |
 | `subject` contiene el término | 2 |
 | `original_prompt` contiene el término | 1 |
 | `enhanced_prompt` contiene el término | 1 |
 
+Un término cuenta como **un solo match** aunque coincida en varios campos.
+
+**Filtro de cobertura** (`minMatched`): 1-2 términos → basta uno (OR); 3+ → se
+exige `floor(n × 0.75)` de los términos significativos.
+
 Orden: `score DESC, created_at DESC, id DESC`.
+
+> El fallback SQL (`SEARCH_ENGINE=sql`) puntúa los tags con peso **3** en vez de 4
+> y no filtra stopwords: es un rollback, no el camino por defecto.
 
 ### 4.6 Related (recomendaciones)
 
@@ -295,8 +332,10 @@ El motor de grafo calcula similitud multihop:
 
 | Variable | Defecto | Uso |
 |---|---|---|
-| `GRAPH_REFRESH_MS` | `60000` | Intervalo de refresh del grafo (ms) |
+| `GRAPH_REFRESH_MS` | `60000` | Intervalo del refresco incremental (ms) |
+| `GRAPH_FULL_RELOAD_MS` | `600000` | Intervalo del rebuild completo + recarga del índice semántico (ms) |
 | `SEARCH_ENGINE` | `graph` | `graph` (motor en memoria) o `sql` (rollback) |
+| `SEARCH_MODE` | `lexical` | `lexical` / `semantic` / `hybrid` (la app corre en `hybrid`) |
 | `METADATA_EMBED` | `none` | `exiftool` (incrustar EXIF/IPTC) o `none` |
 | `DB_MOCK` | `false` | `true` para modo mock (sin PostgreSQL/S3) |
 
@@ -316,6 +355,7 @@ El motor de grafo calcula similitud multihop:
 | `limit` | number | 200 | Máximo de nodos (máx. 500) |
 | `center` | string | — | ID de nodo para ego-graph (vecindario) |
 | `hops` | number | 1 | Profundidad de vecindario (1-3) |
+| `ids` | string | — | Subgrafo inducido por un set de imágenes (coma-separado): nodos imagen + metadatos compartidos por **2+** imágenes del set |
 
 **Respuesta:**
 
@@ -341,15 +381,17 @@ interface GraphEdge {
 }
 ```
 
-### 5.2 Frontend (Sigma.js)
+### 5.2 Frontend (vis-network)
 
-- **Renderizado WebGL** via Sigma.js 3 + Graphology
-- **Layout force-directed** (simulación en el cliente)
+- **Renderizado sobre canvas** via `vis-network` (familia vis.js, el motor del visor `graph.html` de Graphify)
+- **Layout por física** en el cliente: Barnes-Hut (resortes + repulsión); al estabilizarse se detiene la simulación
 - **Toggle de tipos** para mostrar/ocultar nodos por categoría
 - **Click en nodo** para navegar al detalle (imágenes) o filtrar (tags/styles)
 - **Vecindario** al hacer click: resalta conexiones directas
-- **Estadísticas** en tiempo real: nodos/arestas visibles
 - **Responsive** se adapta al tamaño del contenedor
+
+El render vive en `components/features/GraphCanvas.tsx` (props `data` / `height` /
+`onNodeClick`) y lo reutilizan la página de grafo y el subgrafo de la búsqueda.
 
 ### 5.3 Colores de nodos
 
@@ -370,17 +412,17 @@ interface GraphEdge {
 
 | Método y ruta | Query params | Respuesta |
 |---|---|---|
-| `GET /api/health` | — | `{ ok: true, ts: string }` |
+| `GET /api/health` | — | `{ ok, ts, graph: { rows, nodes, edges, ... }, search: { mode, model } }` |
 | `GET /api/images` | `page` (def. 1), `limit` (máx. 100, def. 24), `style`, `mood`, `use_case` | `{ items: Image[], page, limit, total, hasMore }` |
 | `GET /api/images/:id` | — | `Image` o `{ error: "Image not found" }` (404) |
 | `GET /api/images/:id/download` | `format=webp\|png\|jpg` (def. `webp`) | Binario (Content-Type: image/...) o `{ error }` |
 | `GET /api/images/:id/related` | `limit` (máx. 24, def. 8) | `{ items: Image[] }` |
-| `GET /api/search` | `q`, `page`, `limit` | `{ items: Image[], page, limit, total, hasMore, q }` |
+| `GET /api/search` | `q`, `page`, `limit`, `mode` (`lexical\|semantic\|hybrid`), `graph=1` (incluye subgrafo del top-100) | `{ items, page, limit, total, hasMore, q, mode, graph? }` |
 | `GET /api/tags` | `limit` (máx. 500, def. 200) | `{ items: TagWithCount[] }` |
 | `GET /api/tags/:tag/images` | `page`, `limit` | `{ items: Image[], page, limit, total, hasMore, tag }` |
 | `GET /api/filters` | — | `{ styles: FilterValue[], moods: FilterValue[], useCases: FilterValue[] }` |
 | `GET /api/stats` | — | `{ total, topStyles: FilterValue[], topMoods: FilterValue[], topTags: TagWithCount[] }` |
-| `GET /api/graph` | `types`, `limit`, `center`, `hops` | `{ nodes: GraphNode[], edges: GraphEdge[] }` |
+| `GET /api/graph` | `types`, `limit`, `center`, `hops`, `ids` | `{ nodes: GraphNode[], edges: GraphEdge[] }` |
 
 ### 6.2 Forma de los tipos
 
@@ -443,7 +485,7 @@ Definidas en [App.tsx](apps/web/src/App.tsx), todas dentro de un Layout común:
 | `/tags` | Tags | Todos los tags como chips |
 | `/tag/:tag` | TagPage | Grid filtrado por un tag |
 | `/stats` | Stats | Totales y rankings |
-| `/graph` | Graph | Red interactiva con sigma.js (WebGL) |
+| `/graph` | Graph | Red interactiva con vis-network (canvas) |
 | `*` | NotFound | 404 del cliente |
 
 ### 7.2 Data fetching
@@ -478,7 +520,13 @@ Tema oscuro fijo (`color-scheme: dark`):
 | `CORS_ORIGIN` | `*` | Orígenes permitidos |
 | `DB_MOCK` | `false` | Modo mock (sin DB/S3) |
 | `SEARCH_ENGINE` | `graph` | Motor de búsqueda |
-| `GRAPH_REFRESH_MS` | `60000` | Intervalo de refresh |
+| `GRAPH_REFRESH_MS` | `60000` | Intervalo del refresco incremental |
+| `GRAPH_FULL_RELOAD_MS` | `600000` | Intervalo del rebuild completo + recarga del índice semántico |
+| `SEARCH_MODE` | `lexical` | `lexical` / `semantic` / `hybrid` |
+| `EMBED_MODEL` | `bge-m3` | Modelo de embeddings (1024 dims) |
+| `EMBED_SERVER` | `http://127.0.0.1:11434` | Ollama local |
+| `EMBED_DIM` | `1024` | Dimensiones del vector |
+| `SEMANTIC_MIN_SCORE` | `0.65` | Umbral de coseno **solo** para el feed semántico del modo `hybrid` |
 | `METADATA_EMBED` | `none` | `exiftool` para incrustar metadatos |
 | `ALLOW_BACKFILL_WRITE` | `false` | Permitir escritura en S3 |
 
@@ -504,13 +552,15 @@ flowchart TD
     ROOT[vorael/] --> ARQ[ARQUITECTURA.md\ndocumento]
     ROOT --> DEPLOY[DEPLOY.md\ndespliegue paso a paso]
     ROOT --> README[README.md\narranque rapido]
-    ROOT --> DC[docker-compose.yml\nPostgres local puerto 5433]
+    ROOT --> DC[docker-compose.yml\nstack completo: postgres + api + web]
     ROOT --> PKG[package.json\nscripts del monorepo]
     ROOT --> WS[pnpm-workspace.yaml\nworkspaces: apps/*]
 
     ROOT --> DOCS[docs/]
     DOCS --> PLAN[PLAN_GRAFOS.md\ndecisiones de diseno del motor de grafos]
     DOCS --> GUIA[VORAEL_GUIA_COMPLETA.md\nguia completa dummies-friendly]
+    DOCS --> BUSQ[GUIA_BUSQUEDA.md\ncomo funciona una busqueda de punta a punta]
+    DOCS --> EMBG[GUIA_EMBEDDINGS.md\nguia profunda de la busqueda semantica]
 
     ROOT --> APPS[apps/]
 
@@ -518,7 +568,8 @@ flowchart TD
     API --> EXIFCFG[.ExifTool_config\nnamespace XMP-vorael]
     API --> ENV[.env.example\nplantilla local gitignored real .env]
     API --> ENVP[.env.production.example\nplantilla para servidor]
-    API --> TEST[test/\nsuites de test Vitest 98 tests]
+    API --> TEST[test/\nsuites de test Vitest 152 tests]
+    API --> DOCKERFILE[Dockerfile\nbuild multi-stage node:22-slim]
     API --> BENCH[bench/\nbenchmark SQL vs grafo]
     API --> TESTIMG[test-images/\nplaceholders mock Sharp 10 archivos]
     API --> TESTREAL[test-images-real/\nimagenes descargadas de S3 simulacion local ~45MB untracked]
@@ -528,6 +579,8 @@ flowchart TD
     SRC --> DB[db.ts\npool de pg + modo mock]
     SRC --> S3FILE[s3.ts\ncliente de Spaces + presign]
     SRC --> GRAPH[graph.ts\nmotor de grafos Graphology + export]
+    SRC --> EMB2[embeddings.ts\nindice semantico coseno RRF]
+    SRC --> STOP[stopwords.ts\nstopwords ES para la busqueda]
     SRC --> METADATA[metadata.ts\nincrustacion / lectura EXIF IPTC XMP]
     SRC --> MOCK[mockData.ts\ndatos mock 30 imagenes]
     SRC --> TYPES[types.ts\nforma de la fila]
@@ -540,6 +593,7 @@ flowchart TD
     SCRIPTS --> SIM[simulate-local.ts\ndescarga de S3 + incrustacion + DB local]
 
     APPS --> WEB[web/\nSPA React]
+    WEB --> WDOCKER[Dockerfile\nbuild vite + nginx]
     WEB --> MAIN[main.tsx\nproviders y BrowserRouter]
     WEB --> APPFILE[App.tsx\nrutas]
     WEB --> PAGES[pages/\nuna por ruta Gallery Search Graph ...]
@@ -550,6 +604,7 @@ flowchart TD
 
     ROOT --> DEPLOYDIR[deploy/]
     DEPLOYDIR --> NGINX[nginx-vorael.conf\nbloques location para Nginx]
+    DEPLOYDIR --> NGINXD[nginx-docker.conf\nnginx del contenedor web :5173]
     DEPLOYDIR --> SYSTEMD[vorael-api.service\nunidad systemd]
     DEPLOYDIR --> INITSQL[init.sql\nesquema PostgreSQL montado por Docker]
     DEPLOYDIR --> BUILD[build-release.sh\nempaquetado de release]

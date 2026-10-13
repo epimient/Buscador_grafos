@@ -52,7 +52,8 @@ flowchart TD
 | **Sharp** | Una librería que convierte imágenes. Convierte PNG → WebP, redimensiona, optimiza. | Como Photoshop pero automático y rápido |
 | **ExifTool** | Un programa que lee y escribe metadatos en imágenes. Los metadatos son "notas pegadas" al archivo. | Como escribir en la espalda de una foto: "tomada en Paris, 2024" |
 | **Graphology** | Una librería para manejar grafos (nodos conectados con líneas). Usa para buscar relaciones. | Como un mapa del metro: estaciones (nodos) conectadas por líneas (aristas) |
-| **Sigma.js** | Una librería para dibujar grafos en pantalla con gráficos 3D rápidos (WebGL). | Como Google Maps pero para mostrar relaciones entre cosas |
+| **vis-network** | La librería (familia vis.js) que dibuja el grafo interactivo en el navegador sobre un canvas. | Como Google Maps pero para mostrar relaciones entre cosas |
+| **Ollama (bge-m3)** | Un modelo de IA local que convierte texto en vectores (1024 números) para buscar por *significado*. Corre en tu máquina, no en internet. | Como un traductor que decide que "auto" y "vehículo" quieren decir lo mismo |
 | **TanStack Query** | Maneja cómo el frontend pide datos al backend y los.cachea. | Como un bibliotecario que recuerda los últimos libros que pediste |
 
 ---
@@ -85,15 +86,28 @@ sequenceDiagram
     participant F as Frontend
     participant A as API
     participant G as Grafo en memoria
+    participant O as Ollama (bge-m3)
+    participant S as Indice semantico (RAM)
 
     U->>F: Escribe "gato"
-    F->>A: GET /api/search?q=gato
-    A->>G: Busca tag "cat", subject "gato", prompts "gato"
-    G-->>A: Coincidencias
-    A->>A: Calcula puntaje (tag +3, subject +2, prompt +1)
-    A-->>F: Imagenes ordenadas por puntaje
+    F->>A: GET /api/search?q=gato&mode=hybrid
+    par Buscador lexico (palabras)
+        A->>G: token-match en tags/subject/prompts
+        G-->>A: Coincidencias + puntaje (tag +4, subject +2, prompt +1)
+    and Buscador semantico (significado)
+        A->>O: convierte "gato" en un vector
+        O-->>A: vector de 1024 numeros
+        A->>S: coseno contra los 53 839 vectores
+        S-->>A: top-100 por significado
+    end
+    A->>A: Fusiona ambas listas con RRF
+    A-->>F: Imagenes ordenadas por relevancia
     F-->>U: Muestra resultados
 ```
+
+> El modo por defecto (`hybrid`) corre **los dos buscadores** y los fusiona. El
+> detalle de cada uno está en [GUIA_BUSQUEDA.md](GUIA_BUSQUEDA.md); la parte
+> semántica en profundidad, en [GUIA_EMBEDDINGS.md](GUIA_EMBEDDINGS.md).
 
 ### Flujo 3: El usuario descarga una imagen
 
@@ -129,19 +143,17 @@ sequenceDiagram
     participant F as Frontend
     participant A as API
     participant M as Grafo en memoria
-    participant GR as Graphology
-    participant SI as Sigma.js
+    participant VN as vis-network
 
     U->>F: Abre /vorael/graph
     F->>A: GET /api/graph?limit=200
-    A->>M: Serializa grafo (143 nodos, 507 aristas)
+    A->>M: Serializa grafo (nodos + aristas)
     M-->>A: nodes + edges
     A-->>F: JSON { nodes, edges }
-    F->>GR: Crea grafo en memoria del navegador
-    GR->>GR: Layout force-directed (50 iteraciones)
-    GR->>SI: Grafo posicionado
-    SI->>SI: Dibuja con WebGL (3D rapido)
-    SI-->>U: Ve red de conexiones
+    F->>VN: Pasa los nodos y aristas
+    VN->>VN: Simulacion de fisica (Barnes-Hut: resortes + repulsion)
+    VN->>VN: Dibuja sobre canvas
+    VN-->>U: Ve red de conexiones
 ```
 
 ---
@@ -256,9 +268,9 @@ Cuando buscas "cat sunset", el sistema:
    - ¿Aparece como **tag**? → +4 puntos (peso alto)
    - ¿Aparece como palabra en el **subject**? → +2 puntos
    - ¿Aparece como palabra en el **prompt original o mejorado**? → +1 punto cada uno
-3. **Filtro de cobertura** (para párrafos):
-   - Queries de 1-3 términos: basta que **uno** coincida (comporta OR)
-   - Queries largas: se exige que coincida **≥ 50%** de los términos únicos
+3. **Filtro de cobertura** (para frases largas):
+   - Queries de 1-2 términos: basta que **uno** coincida (comportamiento OR)
+   - Queries de 3+ términos: se exige **≥ 75%** de los términos *significativos* (sin stopwords: "de", "la", "frente"… no cuentan)
 4. **Ordena** por puntaje DESC (empate: fecha DESC, id DESC)
 5. Devuelve las más relevantes
 
@@ -290,8 +302,8 @@ Las líneas muestran las conexiones.
 
 ### ¿Cómo funciona?
 
-1. **Sigma.js** dibuja todo usando **WebGL** (la misma tecnología de los videojuegos 3D)
-2. Los nodos se posicionan automáticamente con un **algoritmo force-directed**:
+1. **vis-network** dibuja todo sobre un **canvas** (el mismo motor vis.js que usa el visor de Graphify)
+2. Los nodos se posicionan automáticamente con una **simulación de física** tipo force-directed (Barnes-Hut: resortes + repulsión):
    - Los nodos se repelen (como imanes del mismo polo)
    - Los nodos conectados se atraen (como resortes)
    - Todo se centra en el medio
@@ -381,29 +393,36 @@ Imagen 3: tags=[dog, park], subject="Dog in park"
   → TOTAL: 0 puntos
 ```
 
-### Paso 4: Filtro de cobertura (para párrafos)
+### Paso 4: Filtro de cobertura (para frases largas)
 
-Aquí está la clave de la búsqueda "tipo párrafo". VORAEL cuenta **cuántos términos únicos** de tu consulta coincidieron en cada imagen:
+Antes de contar, VORAEL descarta las **stopwords** (palabras vacías: "a", "on",
+"in", "de", "la"…). Solo cuentan los **términos significativos únicos**:
 
 ```
-"cat sunset"        → 2 términos únicos
-"a cat sleeping on  → 9 términos únicos
- old books in a
- grand library"
+"cat sunset"           → 2 términos significativos
+"a cat sleeping on old
+ books in a library"   → 5 términos significativos
+                          (cat, sleeping, old, books, library)
 ```
 
-- **Queries cortas (1-3 términos):** basta que **un** término coincida. Esto mantiene el comportamiento OR de siempre: buscar "cat spaceship" devuelve las imágenes con tag "cat" aunque "spaceship" no exista.
-- **Párrafos (4+ términos):** se exige que coincidan **al menos el 50%** de los términos únicos. Si escribes un párrafo de 14 palabras, solo aparecen imágenes que coincidan con 7 o más.
+- **Queries de 1-2 términos:** basta que **uno** coincida. Esto mantiene el
+  comportamiento OR de siempre: buscar "cat spaceship" devuelve las imágenes con
+  tag "cat" aunque "spaceship" no exista.
+- **Frases de 3+ términos:** se exige que coincidan **al menos el 75%**
+  (`floor(n × 0.75)`) de los términos significativos: 3 términos → 2;
+  4 términos → 3; 6 términos → 4.
 
 ```
 Párrafo: "a cat sleeping on old books in a grand library with golden light"
+  → significativos (6): cat, sleeping, old, books, grand, library
+  → exige ≥ floor(6 × 0.75) = 4
 
-Imagen A: coincide con "a", "cat", "sleeping", "on", "old", "books",
-          "in", "grand", "library" → 9/9 términos → 100% → APARECE
-Imagen B: solo comparte "a" → 1/9 → 11% → NO aparece
+Imagen A: coincide en cat, sleeping, books, library → 4 → APARECE
+Imagen B: solo comparte "cat" → 1 → NO aparece
 ```
 
-Este filtro elimina el "ruido": antes un párrafo devolvía 157 imágenes (cualquiera que compartiera una palabra); ahora solo vuelven las realmente relevantes.
+Este filtro elimina el "ruido": antes cualquier imagen que compartiera una
+palabra entraba; ahora solo vuelven las que cubren casi toda la frase.
 
 ### Paso 5: Ordenar y devolver
 
@@ -498,7 +517,7 @@ BM25 pondera:
   - Parámetros ajustables (k1, b)
 
 Nuestro sistema pondera:
-  - Tags: +3 puntos
+  - Tags: +4 puntos
   - Subject: +2 puntos
   - Prompts: +1 punto
 ```
@@ -507,20 +526,24 @@ Nuestro sistema pondera:
 
 ### ¿Y los embeddings semánticos?
 
-Los embeddings son la evolución natural de este sistema:
+**Ya están implementados.** La evolución natural del token-match ya está en
+producción como modo `hybrid`:
 
 ```
-Token-Match (actual):
+Token-Match (léxico):
   "gato" = "gato" [SÍ]
   "felino" = "gato" [NO] (no sabe que son lo mismo)
 
-Embeddings semánticos:
+Embeddings semánticos (bge-m3, en Ollama):
   "gato" = [0.23, -0.45, ...]
   "felino" = [0.21, -0.42, ...]  (muy parecido!)
-  Similitud: 0.94 → ¡son lo mismo!
+  Similitud (coseno) alta → ¡son lo mismo!
 ```
 
-**Para cuándo:** Cuando tengas > 1000 imágenes y quieras buscar por significado, no solo por palabras.
+Los dos rankings (léxico y semántico) se fusionan con **RRF** (fusión por rango
+recíproco) y ese resultado es el que devuelve la búsqueda por defecto. El detalle
+completo está en **[GUIA_BUSQUEDA.md](GUIA_BUSQUEDA.md)** y
+**[GUIA_EMBEDDINGS.md](GUIA_EMBEDDINGS.md)**.
 
 ---
 
@@ -530,14 +553,16 @@ Embeddings semánticos:
 flowchart TD
     A["1. Tokenizar y deduplicar: 'gato atardecer' -> gato, atardecer"] --> B["2. Token-Match: palabra completa"]
     B --> C["3. Scoring por término: tags x4 + subject x2 + prompts x1"]
-    C --> D["4. Filtro de cobertura: >= 50% en párrafos, OR en queries cortas"]
+    C --> D["4. Filtro de cobertura: >= 75% en frases de 3+ (sin stopwords), OR en 1-2"]
     D --> E["5. Ordenar: score DESC, fecha DESC"]
     E --> F["6. Co-ocurrencia: tags que aparecen juntos"]
     F --> G["7. Jaccard: calcular similitud entre conjuntos"]
     G --> H["Resultado: imagenes ordenadas por relevancia"]
 ```
 
-**En una frase:** VORAEL busca palabra por palabra (con plural mínimo y acentos normalizados), pondera donde aparece cada término (tags > subject > prompts), exige cobertura mínima en párrafos para no devolver ruido, y usa co-ocurrencia para encontrar imágenes similares. Es como un mini-Google pero optimizado para un catálogo de imágenes.
+**En una frase:** VORAEL busca palabra por palabra (con plural mínimo y acentos normalizados), pondera donde aparece cada término (tags > subject > prompts), exige cobertura mínima en frases largas para no devolver ruido, y usa co-ocurrencia para encontrar imágenes similares. Es como un mini-Google pero optimizado para un catálogo de imágenes.
+
+Además, **en paralelo corre un buscador semántico** (embeddings vía Ollama) y sus resultados se fusionan con los del léxico mediante **RRF**. Ese es el modo por defecto. Para entenderlo de punta a punta: **[GUIA_BUSQUEDA.md](GUIA_BUSQUEDA.md)**.
 
 ---
 
@@ -636,7 +661,7 @@ Para poder probar el sistema completo usando imágenes reales sin afectar el ent
 
 ### ¿Por qué el Grafo dibuja estas imágenes?
 
-Con `DB_MOCK=false`, el motor de la aplicación **lee obligatoriamente de PostgreSQL**. Al haber actualizado la tabla `generated_images` en la base de datos Docker con nuestras imágenes reales descargadas y enriquecidas, el ciclo de auto-refresco del API (cada 60 segundos) detecta los nuevos datos. Automáticamente construye el grafo in-memory usando **Graphology** y el frontend (React/Sigma.js) dibuja la red interactiva con tus **fotos reales**.
+Con `DB_MOCK=false`, el motor de la aplicación **lee obligatoriamente de PostgreSQL**. Al haber actualizado la tabla `generated_images` en la base de datos Docker con nuestras imágenes reales descargadas y enriquecidas, el ciclo de auto-refresco del API (cada 60 segundos) detecta los nuevos datos. Automáticamente construye el grafo in-memory usando **Graphology** y el frontend (React + vis-network) dibuja la red interactiva con tus **fotos reales**.
 
 ---
 
@@ -673,7 +698,7 @@ Las imágenes `s3_url` reutilizan cíclicamente los 30 archivos reales de `test-
 | Comando | ¿Qué hace? | ¿Cuándo usarlo? |
 |---|---|---|
 | `pnpm dev` | Arranca API + web en desarrollo | Cuando estás programando |
-| `pnpm test` | Ejecuta los 110 tests | Para verificar que todo funciona |
+| `pnpm test` | Ejecuta los 152 tests | Para verificar que todo funciona |
 | `pnpm build` | Compila para producción | Antes de subir al servidor |
 | `pnpm export-portable` | Exporta imágenes con metadatos a carpeta local | Para tener copia local |
 | `pnpm backfill` | Reescribe imágenes en S3 con metadatos | Para actualizar el S3 completo |
@@ -686,13 +711,13 @@ Las imágenes `s3_url` reutilizan cíclicamente los 30 archivos reales de `test-
 
 ## Preguntas frecuentes (FAQ)
 
-### ¿Por qué hay 110 tests?
+### ¿Por qué hay 152 tests?
 
-Los tests son como un **seguro de vida**. Cada vez que alguien cambia el código, los tests verifican que nada se rompió. Si un test falla, sabemos exactamente qué se rompió. Incluyen 7 tests del generador de dataset sintético y 5 tests de cobertura (búsqueda de párrafos).
+Los tests son como un **seguro de vida**. Cada vez que alguien cambia el código, los tests verifican que nada se rompió. Si un test falla, sabemos exactamente qué se rompió. Incluyen tests del generador de dataset sintético, de cobertura (búsqueda de frases largas), de stopwords, de embeddings y del grafo.
 
 ### ¿Puedo buscar un párrafo completo?
 
-Sí, en inglés. El buscador separa tu texto en palabras y exige que la imagen coincida con al menos el 50% de ellas (en queries de 4+ términos). Un párrafo en español no dará resultados porque los datos están en inglés; prueba con palabras clave sueltas o frases cortas.
+Sí. El buscador descarta las **stopwords** y exige que la imagen coincida con al menos el **75%** de los términos *significativos* (en frases de 3+ términos). Además, en modo híbrido el buscador semántico entiende el *significado* del párrafo. Nota: la metadata está mayormente en inglés, así que una frase en español rinde mejor por el lado semántico; igualmente puedes probar con palabras clave sueltas o frases cortas.
 
 ### ¿Por qué el grafo se refresca cada 60 segundos?
 
@@ -732,11 +757,11 @@ Un **sistema completo** para mostrar, buscar y descargar imágenes generadas por
 2. **Búsqueda inteligente** que entiende tags, estilos y moods
 3. **Descarga con metadatos** incrustados en cada imagen
 4. **Grafo interactivo** que muestra relaciones entre imágenes
-5. **98 tests** que garantizan que todo funciona
+5. **152 tests** que garantizan que todo funciona
 
 ### ¿Qué tecnologías usamos?
 
-- **Frontend:** React + Vite + Tailwind + Sigma.js
+- **Frontend:** React + Vite + Tailwind + vis-network
 - **Backend:** Express + TypeScript + PostgreSQL
 - **Almacenamiento:** DigitalOcean Spaces (S3)
 - **Procesamiento:** Sharp (imágenes) + ExifTool (metadatos)

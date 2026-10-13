@@ -1,5 +1,10 @@
 # Despliegue — https://n8n.americana.edu.co/vorael/
 
+> Para **replicar VORAEL en una máquina nueva** (modo mock, stack Docker o
+> réplica de producción) y conectarlo a datos reales, ver
+> **[docs/INSTALACION.md](docs/INSTALACION.md)**. Esta guía asume el servidor de
+> producción ya existente y cubre Nginx + systemd + verificación.
+
 VORAEL se sirve como sub-ruta de un dominio que ya existe. Dos piezas:
 
 | Pieza | Qué es | Dónde vive | Cómo se sirve |
@@ -145,6 +150,25 @@ En el navegador, además:
 - `https://n8n.americana.edu.co/vorael/search?q=azul` recarga sin 404 (fallback SPA).
 - `https://n8n.americana.edu.co/vorael/image/<id>` recarga sin 404.
 - El botón de descarga entrega el archivo (ruta `/api/images/:id/download`).
+
+## 6. Alternativa: stack completo con Docker (localhost)
+
+Para desarrollo o una demo portátil, `docker-compose.yml` levanta **Postgres +
+API + web** juntos. No reemplaza el despliegue de producción de arriba:
+
+```bash
+sudo docker compose up -d --build
+# web:  http://localhost:5173/vorael/
+# api:  http://127.0.0.1:3001/api/health
+sudo docker compose logs -f api      # ver el boot del grafo + índice semántico
+sudo docker compose down             # el volumen pgdata persiste
+```
+
+- `api` y `web` corren con `network_mode: host` para alcanzar el Ollama del host
+  (`127.0.0.1:11434`); sin eso, la búsqueda semántica degradaría a léxica.
+- El nginx del contenedor ([`deploy/nginx-docker.conf`](deploy/nginx-docker.conf))
+  sirve el SPA en `/vorael/` y proxea `/vorael/api/` → `127.0.0.1:3001`.
+- El `.env` del API se inyecta con `env_file` (nunca va dentro de la imagen).
 
 ---
 

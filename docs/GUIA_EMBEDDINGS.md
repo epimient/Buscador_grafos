@@ -19,6 +19,10 @@ VORAEL tenía un buscador **léxico** (por palabras exactas) que funcionaba bien
 
 Esta guía explica **cómo se construyó la solución**: un motor de **embeddings semánticos** con tres modos de búsqueda, un script para generar los vectores, y cómo sobrevive a fallos sin romper nada.
 
+> ¿Buscas una explicación de entrada, sin código? Ver
+> **[GUIA_BUSQUEDA.md](GUIA_BUSQUEDA.md)** (cómo funciona una búsqueda de punta a
+> punta: léxico + semántico + fusión RRF).
+
 ---
 
 ## Los embeddings en palabras simples
@@ -185,7 +189,9 @@ Es un módulo nuevo y **puro** (sin efectos secundarios, todo testeable). Sus pi
 
 ### 1. El índice en memoria (`SemanticIndex`)
 
-Cuando el API recibe su primera búsqueda `semantic` o `hybrid`, **carga** todos los vectores de la base a la RAM:
+El API **precarga** todos los vectores a la RAM al arrancar (`warmSemanticIndex`,
+si el modo no es `lexical`), para que la carga no caiga sobre el primer request.
+La primera búsqueda `semantic`/`hybrid` ya lo encuentra listo:
 
 ```
 SELECT id, embedding, model FROM image_embeddings WHERE model = 'bge-m3'
@@ -193,8 +199,10 @@ SELECT id, embedding, model FROM image_embeddings WHERE model = 'bge-m3'
 ```
 
 - 53,839 vectores × 1024 números × 4 bytes (float32) = **~220 MB de RAM**.
-- Tiempo de carga medido: **~29 segundos** para los 53,839.
-- Se carga **una sola vez** y se queda en memoria (cache en `routes/search.ts`).
+- Tiempo de carga medido: **~25 segundos** para los 53,839.
+- Se carga **una sola vez** y se queda en memoria; `startSemanticRefresh`
+  (cada `GRAPH_FULL_RELOAD_MS`, 10 min por defecto) lo **recarga** para recoger
+  embeddings nuevos sin reiniciar. El timer está `unref()`.
 
 ```mermaid
 flowchart LR
@@ -230,8 +238,16 @@ A · B = suma de A[i] × B[i]   (producto punto)
 
 1. Se convierte la **query del usuario** a vector (con `embedQuery`).
 2. Se calcula el **coseno** contra los 53,839 vectores del índice.
-3. Se quedan los que tienen score **> 0**.
-4. Se ordenan de mayor a menor y se devuelven los **top 100**.
+3. Se descartan los que no superan el **umbral `minScore`** y se ordenan de mayor
+   a menor.
+4. Se devuelven los **top 100**.
+
+El valor de `minScore` depende del modo (lo decide `routes/search.ts`):
+
+| Modo | `minScore` | Por qué |
+|---|---|---|
+| `hybrid` | `SEMANTIC_MIN_SCORE` (def. **0.65**) | Freno anti-ruido: solo entran candidatos realmente cercanos al feed del RRF. |
+| `semantic` (puro) | **0** | El usuario pide los top-100 directos; `bge-m3` casi no pasa de 0.65 y filtrar dejaba la búsqueda en ~5 resultados. |
 
 ```mermaid
 flowchart TD
@@ -364,6 +380,11 @@ Gato negro bajo la luna:
 
 **Resultado:** las imágenes que *ambos* motores consideran relevantes ganan. El ruido de uno solo se hunde.
 
+**Qué listas entran:** al RRF solo llega el **top-100 del ranking léxico** + el
+**top-100 semántico ya filtrado** por `SEMANTIC_MIN_SCORE`. El resto es ruido de
+baja cobertura. Por eso, en `hybrid`, el campo `total` de la respuesta es el
+**largo del ranking fusionado** (no la unión cruda de ambos lados).
+
 ---
 
 ## El flujo completo de una búsqueda (paso a paso)
@@ -388,7 +409,7 @@ sequenceDiagram
     and
         R->>R: (índice ya cargado)
         alt Índice no cargado
-            R->>M: loadSemanticIndex() → 53,839 vectores (29s)
+            R->>M: loadSemanticIndex() → 53,839 vectores (~25s, precargado al boot)
         end
         R->>E: embedQuery(q) → vector (280ms, cacheable)
         E->>O: POST /api/embed
@@ -423,7 +444,7 @@ El usuario **nunca ve un error 500** por culpa de Ollama.
 | `EMBED_MODEL` | Modelo de embeddings | `bge-m3` | `bge-m3` (1024) / `nomic-embed-text` (768) |
 | `EMBED_SERVER` | Dónde corre Ollama | `http://127.0.0.1:11434` | URL de Ollama |
 | `EMBED_DIM` | Dimensiones del modelo | `1024` | coincide con el modelo |
-| `SEMANTIC_MIN_SCORE` | Umbral de coseno para resultados semánticos | `0.65` | `0..1` |
+| `SEMANTIC_MIN_SCORE` | Umbral de coseno del feed semántico (**solo en modo `hybrid`**) | `0.65` | `0..1` |
 
 Ejemplo en `apps/api/.env` para activar el modo híbrido por defecto:
 

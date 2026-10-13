@@ -14,6 +14,11 @@ pnpm lint                    # lint both packages
 pnpm dev                     # dev both (api :3001, web :5173)
 pnpm seed:generate           # sintetiza + siembra 1000 filas gen-* (DB_MOCK=false)
 pnpm seed:generate:clear     # borra filas gen-* y re-siembra
+
+# Stack completo con Docker (postgres + api + web, network_mode: host)
+sudo docker compose up -d --build
+sudo docker compose logs -f api   # ver boot del grafo + índice semántico
+sudo docker compose down          # para todo (pgdata persiste en volumen)
 ```
 
 ## Architecture
@@ -60,10 +65,14 @@ Tests live in `apps/api/test/`:
 - `related.test.ts` — related images via graph similarity
 - `tags.test.ts` — tag listing and tag-images endpoint
 - `facets.test.ts` — filters and stats endpoints
+- `embeddings.test.ts` — cosine, searchSemantic, rrfFuse (pure functions)
+- `incremental.test.ts` — delta refresh / watermark keyset
+- `stopwords.test.ts` — stopwords ES + `meaningfulTerms`
+- `seed.test.ts` — synthetic dataset generator
 - `exif.test.ts` — metadata embedding (requires exiftool)
 - `metadata.test.ts` — metadata roundtrip (requires exiftool)
 
-120→nah, real count: 133 tests total, all passing (`metadata.test.ts`/`exif.test.ts` cubren el round-trip ExifTool si el binario y `.ExifTool_config` existen; degradan a fallback si no). Run with `pnpm test` from root or `npx vitest run` from `apps/api/`.
+Real count: **152 tests total**, all passing (`metadata.test.ts`/`exif.test.ts` cubren el round-trip ExifTool si el binario y `.ExifTool_config` existen; degradan a fallback si no). Run with `pnpm test` from root or `npx vitest run` from `apps/api/`.
 
 ## Key files
 
@@ -74,7 +83,7 @@ Tests live in `apps/api/test/`:
 - `apps/api/src/db.ts` — pg pool + mock-aware query()
 - `apps/api/src/mockData.ts` — 30 test images with TEST_URL/TEST_KEY helpers
 - `apps/api/.ExifTool_config` — Custom XMP namespace definition
-- `apps/web/src/pages/Graph.tsx` — Sigma.js graph visualization
+- `apps/web/src/pages/Graph.tsx` — página del grafo (usa `GraphCanvas` con vis-network)
 - `apps/web/src/components/features/GraphCanvas.tsx` — render reutilizable con **vis-network** (el motor de graph.html de Graphify: Barnes-Hut + highlight de vecinos); lo usan GraphPage y el subgrafo de Search
 - `GET /api/graph?ids=id1,id2,…` — subgrafo inducido por un conjunto de imágenes: nodos imagen + metadatos que comparten **2+ imágenes del set** (los compartidos por 1 sola se filtran, no "unen" nada). El `size` de un metadato = cuántas imágenes del set lo comparten. **Esto también optimiza el render**: una búsqueda de 100 imágenes con ~1070 metadatos crudos baja a ~220 nodos.
 - `GET /api/search?graph=1` — devuelve el subgrafo del top-100 del ranking actual en `response.graph`. El frontend lo pide aparte del feed infinito (solo cuando el usuario abre el toggle "Ver grafo" en Search.tsx), para no arrastrar el grafo en cada página.
@@ -88,3 +97,4 @@ Tests live in `apps/api/test/`:
 - `SEARCH_ENGINE=graph` (default) → in-memory Graphology, refreshes every 60s. `SEARCH_ENGINE=sql` → falls back to PostgreSQL queries.
 - `apps/api/.env.production.example` shows the template for real credentials.
 - `test-images-real/` contains real images downloaded from S3 (for local simulation). These are large (~45MB) and untracked.
+- **Docker full stack**: `sudo docker compose up -d --build` levanta postgres + api + web con `network_mode: host` (por Ollama en 127.0.0.1 y el bind loopback del API). La web sirve el SPA build en http://localhost:5173/vorael/ y proxea /vorael/api/ a 127.0.0.1:3001. Los Dockerfiles viven en `apps/api/Dockerfile` y `apps/web/Dockerfile` (contexto = raíz del monorepo); el nginx del contenedor es `deploy/nginx-docker.conf`. El `.env` del API se inyecta con `env_file` (no va en la imagen).
