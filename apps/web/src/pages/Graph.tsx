@@ -53,16 +53,19 @@ export function GraphPage() {
     }
   }, []);
 
-  function onNodeClick(node: GraphNode) {
-    if (node.type === 'image') {
-      navigate(`/image/${encodeURIComponent(node.id)}`);
-    } else if (node.type === 'tag') {
-      navigate(`/tag/${encodeURIComponent(node.label)}`);
-    } else {
-      // Centrar en metadatos (GraphCanvas resalta vecinos).
-      setSelectedNode(node.id);
-    }
-  }
+  const onNodeClick = useCallback(
+    (node: GraphNode) => {
+      if (node.type === 'image') {
+        navigate(`/image/${encodeURIComponent(node.id)}`);
+      } else if (node.type === 'tag') {
+        navigate(`/tag/${encodeURIComponent(node.label)}`);
+      } else {
+        // Centrar en metadatos (GraphCanvas resalta vecinos).
+        setSelectedNode(node.id);
+      }
+    },
+    [navigate],
+  );
 
   useEffect(() => {
     loadData([...activeTypes]);

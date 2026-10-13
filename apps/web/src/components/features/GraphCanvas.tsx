@@ -29,6 +29,12 @@ export function GraphCanvas({ data, height = '70vh', onNodeClick }: GraphCanvasP
   const nodesRef = useRef<DataSetNodes | null>(null);
   const edgesRef = useRef<DataSetEdges | null>(null);
   const originalColors = useRef<Map<string, string>>(new Map());
+  // Mantener el último callback en un ref para que el efecto NO dependa de la
+  // identidad de `onNodeClick`: si dependiera, cada re-render del padre (p. ej.
+  // al seleccionar un nodo) reconstruiría la red y RE-DISPARARÍA la física — el
+  // grafo se "vuelve a acomodar" en cada clic.
+  const onNodeClickRef = useRef(onNodeClick);
+  onNodeClickRef.current = onNodeClick;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -96,12 +102,19 @@ export function GraphCanvas({ data, height = '70vh', onNodeClick }: GraphCanvasP
       },
       physics: {
         enabled: true,
-        stabilization: { enabled: true, iterations: 1000 },
+        // `fit:true` encuadra el grafo al terminar de estabilizar.
+        stabilization: { enabled: true, iterations: 1000, fit: true },
         barnesHut: {
-          gravitationalConstant: -40000,
+          // Repulsión moderada: -40000 (20× el default) no converge — el grafo
+          // sigue empujándose y "gira" durante toda la estabilización. -12000
+          // mantiene el look de red dispersa pero sí asienta.
+          gravitationalConstant: -12000,
           springLength: 120,
           springConstant: 0.04,
-          avoidOverlap: 0.6,
+          // `damping` frena la energía (default 0.09); `avoidOverlap` alto (0.6)
+          // mantiene a los nodos rebotando. Con 0.4 + damping se apaga la vibración.
+          damping: 0.2,
+          avoidOverlap: 0.4,
         },
       },
     };
@@ -109,11 +122,20 @@ export function GraphCanvas({ data, height = '70vh', onNodeClick }: GraphCanvasP
     const network = new Network(container, { nodes: nodesDataSet, edges: edgesDataSet }, options);
     networkRef.current = network;
 
-    // Congelar la física cuando termina la estabilización inicial: vis-network
-    // sigue simulando (y vibrando) mientras physics.enabled siga en true.
-    network.once('stabilized', () => {
-      network.stopSimulation();
-    });
+    // Congelar la física cuando termina la estabilización inicial.
+    //
+    // OJO: `stopSimulation()` NO alcanza — solo pausa, y vis-network la reinicia
+    // al "alterar el dataset" (nuestro highlight hace nodesDataSet.update() en
+    // cada click) o al arrastrar un nodo. Desactivar `physics` la congela de
+    // verdad, así que los updates de color no la vuelven a disparar.
+    //
+    // Se escuchan AMBOS eventos: 'stabilized' (el grafo convergió) y
+    // 'stabilizationIterationsDone' (agotó las iteraciones sin converger, típico
+    // en grafos grandes con repulsión fuerte). Si solo se escuchara el primero,
+    // en esos casos la física quedaría corriendo y el grafo temblaría siempre.
+    const freezePhysics = () => network.setOptions({ physics: { enabled: false } });
+    network.once('stabilized', freezePhysics);
+    network.once('stabilizationIterationsDone', freezePhysics);
 
     const highlight = (nodeId: string) => {
       const updates: Node[] = [];
@@ -163,8 +185,9 @@ export function GraphCanvas({ data, height = '70vh', onNodeClick }: GraphCanvasP
 
       highlight(nodeId);
 
-      if (onNodeClick) {
-        onNodeClick(info);
+      const onClick = onNodeClickRef.current;
+      if (onClick) {
+        onClick(info);
         return;
       }
 
@@ -186,7 +209,7 @@ export function GraphCanvas({ data, height = '70vh', onNodeClick }: GraphCanvasP
       nodesRef.current = null;
       edgesRef.current = null;
     };
-  }, [data, navigate, onNodeClick]);
+  }, [data, navigate]);
 
   return <div ref={containerRef} className="h-full w-full" style={{ height }} />;
 }
