@@ -8,7 +8,7 @@ import { GraphCanvas } from '@/components/features/GraphCanvas';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { Spinner } from '@/components/ui/Spinner';
-import { Network } from 'lucide-react';
+import { Network, Sparkles } from 'lucide-react';
 import { isSearchMode, searchImages, type SearchMode } from '@/services/api';
 import { cn } from '@/lib/utils';
 
@@ -69,6 +69,14 @@ export function SearchPage() {
   const pages = data?.pages ?? [];
   const totalLoaded = pages.reduce((n, p) => n + p.items.length, 0);
   const total = data?.pages[0]?.total ?? 0;
+
+  // Un 0 en modo no-semántico puede ser un artefacto del ranking (la cobertura
+  // léxica exige coincidir el 75% de los términos, y en híbrido el feed
+  // semántico se filtra por SEMANTIC_MIN_SCORE). El modo semántico puede
+  // encontrar candidatos por significado aunque no repitan las palabras, así
+  // que si estamos en otro modo ofrecemos el salto como acción explícita.
+  const canSuggestSemantic = activeMode !== 'semantic';
+  const modeLabel = MODES.find((m) => m.id === activeMode)?.label.toLowerCase() ?? activeMode;
 
   if (!q) {
     return (
@@ -147,7 +155,23 @@ export function SearchPage() {
       ) : !isLoading && totalLoaded === 0 ? (
         <EmptyState
           title="Sin coincidencias"
-          description={`No encontramos imágenes para “${q}”. Prueba con términos más generales o cambia el modo.`}
+          description={
+            canSuggestSemantic
+              ? `No encontramos imágenes para “${q}” en modo ${modeLabel}. La búsqueda semántica puede encontrar coincidencias por significado, aunque no repitan las mismas palabras.`
+              : `No encontramos imágenes para “${q}”. Prueba con términos más generales o cambia el modo.`
+          }
+          action={
+            canSuggestSemantic ? (
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => onPickMode('semantic')}
+              >
+                <Sparkles className="h-4 w-4" aria-hidden />
+                Probar búsqueda semántica
+              </button>
+            ) : undefined
+          }
         />
       ) : (
         <ImageGrid pages={pages} loading={isLoading} loadingMore={isFetchingNextPage} />
